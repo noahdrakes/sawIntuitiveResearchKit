@@ -1,0 +1,127 @@
+{
+    "$id": "dvrk-system.schema.json",
+    "$version": "1",
+    "IOs":
+    [
+        {
+            "name": "IO",
+            "port": "fw",
+            "protocol": "sequential-read-write",
+            "capacitive_touch_config_file": "capactive_touch_config_file.xml"	
+	}
+    ],
+    "component_manager": {
+        "components": [
+            {
+                "shared-library": "sawIntuitiveResearchKitBilateralTeleop",
+                "class-name": "mtsBilateralTeleOperationPSM",
+                "constructor-arg": {
+                    "Name": "MTMR_PSM2",
+                    "Period": 0.001
+                },
+                "configure-parameter": "MTMR_PSM2_teleop_config.json"
+            }
+        ]
+    },
+    "arms":
+  [
+        {
+            "IO" : "IO",
+            "base_frame" : 
+            {
+                "reference_frame" : "fixed ECM",
+                "transform" : 
+                [
+                    [
+                        0.99999999999999989,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        -0.86602540378443849,
+                        0.50000000000000033,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        -0.50000000000000033,
+                        -0.86602540378443849,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                    ]
+                ]
+            },
+            "name" : "PSM2",
+            "serial" : "27374",
+            "type" : "PSM"
+        },
+        {
+            "IO" : "IO",
+            "base_frame" : 
+            {
+                "reference_frame" : "HRSV",
+                "transform" : 
+                [
+                    [
+                        -1.0,
+                        -1.0605752387249068e-16,
+                        6.1232339957367673e-17,
+                        -0.17999999999999999
+                    ],
+                    [
+                        0.0,
+                        0.50000000000000011,
+                        0.8660254037844386,
+                        0.40000000000000002
+                    ],
+                    [
+                        -1.2246467991473532e-16,
+                        0.8660254037844386,
+                        -0.50000000000000011,
+                        0.47499999999999998
+                    ],
+                    [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                    ]
+                ]
+            },
+            "name" : "MTMR",
+            "serial" : "22403",
+            "type" : "MTM"
+        }
+    ]
+    ,
+    "consoles":
+    [
+        {
+            "name": "console",
+            "input_type": "PEDALS_GOOVIS_HEAD_SENSOR",
+            "IO_pedals" :
+            {
+                "IO": "IO",
+                "IO_file": "io/sawRobotIO1394-MTMR-foot-pedals-QLA1.json"
+            }
+            ,
+            "HID_file": "hid/goovis-hd.json"
+            ,
+            "teleop_PSMs":
+            [
+                {
+                    "type": "TELEOP_PSM_DERIVED",
+                    "MTM": "MTMR",
+                    "PSM": "PSM2"
+                }
+            ]
+        }
+    ]
+}

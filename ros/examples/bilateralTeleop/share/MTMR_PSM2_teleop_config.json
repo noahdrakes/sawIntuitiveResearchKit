@@ -1,0 +1,30 @@
+{
+    "psm_force_source": {
+        "component": "PSM2",
+        "interface": "Arm",
+        "function": "body/measured_cf",
+        "body_cf_orientation_absolute": true
+    },
+    "mtm_force_source": {
+        "component": "MTMR",
+        "interface": "Arm",
+        "function": "body/measured_cf",
+        "body_cf_orientation_absolute": true
+    },
+    "scale": 1,
+    "mtm_torque_gain": 0.000,
+    "mtm_force_gain": 1,
+    "psm_force_scale": 1,
+    "teleop_mode": "contact",
+    "contact_detection": {
+        "model_dir": "/home/ndrakes1/force_estimation/contact_detection/bilateral_teleop/models/training_enter0.2_exit2.0_features_first3joints_psm_mtm_lstm_seq5/lstm/gray_foam_heldout",
+        "probability_threshold": 0.5,
+        "debounce_samples_in": 5,
+        "debounce_samples_out": 1
+    },
+    "dynamics_compensation": {
+        "psm_model_dir": "/home/ndrakes1/force_estimation/contact_detection/dynamics_estimation/checkpoints_freespace2/psm_dynamics",
+        "mtm_model_dir": "/home/ndrakes1/force_estimation/contact_detection/dynamics_estimation/checkpoints_freespace2/mtm_dynamics"
+    }
+}
+    

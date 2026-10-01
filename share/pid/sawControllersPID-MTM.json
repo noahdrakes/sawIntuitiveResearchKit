@@ -1,79 +1,133 @@
 {
     "$id": "saw-controllers-pid.schema.json",
     "$version": "1",
-    "pid": [
-        {
-            "index": 0,
-            "name": "outer_yaw",
-            "type": "REVOLUTE",
-            "p_gain": 100.0,
-            "d_gain": 10.0,
-            "i_gain": 0.0,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.2 // ~11 degrees
-        },
-        {
-            "index": 1,
-            "name": "shoulder_pitch",
-            "type": "REVOLUTE",
-            "p_gain": 80.0,
-            "d_gain": 5.0,
-            "i_gain": 0.0,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.2 // ~11 degrees
-        },
-        {
-            "index": 2,
-            "name": "elbow_pitch",
-            "type": "REVOLUTE",
-            "p_gain": 80.0,
-            "d_gain": 5.0,
-            "i_gain": 0.0,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.2 // ~11 degrees
-        },
-        {
-            "index": 3,
-            "name": "wrist_platform",
-            "type": "REVOLUTE",
-            "p_gain": 3.0,
-            "d_gain": 0.35,
-            "i_gain": 0.0,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.2 // ~11 degrees
-        },
-        {
-            "index": 4,
-            "name": "wrist_pitch",
-            "type": "REVOLUTE",
-            "p_gain": 1.0,
-            "d_gain": 0.028,
-            "i_gain": 0.0,
-            "p_deadband": 0.0,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.5 // ~30 degrees
-        },
-        {
-            "index": 5,
-            "name": "wrist_yaw",
-            "type": "REVOLUTE",
-            "p_gain": 0.4,
-            "d_gain": 0.015,
-            "i_gain": 0.0,
-            "p_deadband": 0.015,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.5 // ~30 degrees
-        },
-        {
-            "index": 6,
-            "name": "wrist_roll",
-            "type": "REVOLUTE",
-            "p_gain": 0.15,
-            "d_gain": 0.005,
-            "i_gain": 0.0,
-            "p_deadband": 0.02,
-            "pid_max_output": -1.0, // disabled, motors are not that powerful
-            "p_measured_setpoint_tolerance": 0.5 // ~30 degrees
-        }
-    ]
+    "pid": 
+    [
+	{
+		"d_gain" : 15.0,
+		"disturbance_cutoff" : 10.0,
+		"i_forget_rate" : 0.98999999999999999,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 0,
+		"name" : "outer_yaw",
+		"nominal_mass" : 0.001,
+		"offset" : 0.0,
+		"p_deadband" : 0.0,
+		"p_gain" : 150.0,
+		"p_measured_setpoint_tolerance" : 0.20000000000000001,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	},
+	{
+		"d_gain" : 20.0,
+		"disturbance_cutoff" : 10.0,
+		"i_forget_rate" : 0.98999999999999999,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 1,
+		"name" : "shoulder_pitch",
+		"nominal_mass" : 0.001,
+		"offset" : 0.0,
+		"p_deadband" : 0.0,
+		"p_gain" : 250.0,
+		"p_measured_setpoint_tolerance" : 0.20000000000000001,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	},
+	{
+		"d_gain" : 20.0,
+		"disturbance_cutoff" : 10.0,
+		"i_forget_rate" : 0.98999999999999999,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 2,
+		"name" : "elbow_pitch",
+		"nominal_mass" : 0.001,
+		"offset" : 0.0,
+		"p_deadband" : 0.0,
+		"p_gain" : 250.0,
+		"p_measured_setpoint_tolerance" : 0.20000000000000001,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	},
+	{
+		"d_gain" : 0.22,
+		"disturbance_cutoff" : 0.0,
+		"i_forget_rate" : 1.0,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 3,
+		"name" : "wrist_platform",
+		"nominal_mass" : 0.0,
+		"offset" : 0.0,
+		"p_deadband" : 0.0,
+		"p_gain" : 2.2000000000000002,
+		"p_measured_setpoint_tolerance" : 0.20000000000000001,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	},
+	{
+		"d_gain" : 0.01,
+		"disturbance_cutoff" : 0.0,
+		"i_forget_rate" : 1.0,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 4,
+		"name" : "wrist_pitch",
+		"nominal_mass" : 0.0,
+		"offset" : 0.0,
+		"p_deadband" : 0.0,
+		"p_gain" : 1.0,
+		"p_measured_setpoint_tolerance" : 0.5,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	},
+	{
+		"d_gain" : 0.015,
+		"disturbance_cutoff" : 0.0,
+		"i_forget_rate" : 1.0,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 5,
+		"name" : "wrist_yaw",
+		"nominal_mass" : 0.0,
+		"offset" : 0.0,
+		"p_deadband" : 0.014999999999999999,
+		"p_gain" : 0.40000000000000002,
+		"p_measured_setpoint_tolerance" : 0.5,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	},
+	{
+		"d_gain" : 0.0050000000000000001,
+		"disturbance_cutoff" : 0.0,
+		"i_forget_rate" : 1.0,
+		"i_gain" : 0.0,
+		"i_limit" : 0.0,
+		"index" : 6,
+		"name" : "wrist_roll",
+		"nominal_mass" : 0.0,
+		"offset" : 0.0,
+		"p_deadband" : 0.02,
+		"p_gain" : 0.15,
+		"p_measured_setpoint_tolerance" : 0.5,
+		"pid_max_output" : -1.0,
+		"type" : "REVOLUTE",
+		"use_disturbance_observer" : true,
+		"v_low_pass_cutoff" : 1.0
+	}
+]
 }

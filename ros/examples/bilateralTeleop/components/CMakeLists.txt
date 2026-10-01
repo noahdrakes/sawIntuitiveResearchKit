@@ -1,5 +1,5 @@
 #
-# (C) Copyright 2025 Johns Hopkins University (JHU), All Rights Reserved.
+# (C) Copyright 2025-2026 Johns Hopkins University (JHU), All Rights Reserved.
 #
 # --- begin cisst license - do not edit ---
 #
@@ -59,68 +59,116 @@ set (
   cisstRobot
   cisstNumerical)
 
-find_package (cisst REQUIRED ${REQUIRED_CISST_LIBRARIES})
+find_package (cisst REQUIRED COMPONENTS ${REQUIRED_CISST_LIBRARIES})
 
-if (cisst_FOUND_AS_REQUIRED)
-  # load cisst configuration
-  include (${CISST_USE_FILE})
+# set paths
+cisst_set_output_path ()
 
-  # set paths
-  cisst_set_output_path ()
+# sawIntuitiveResearchKit has been compiled within cisst, we should
+# find it automatically
+find_package(sawIntuitiveResearchKit 2.4.0 REQUIRED)
 
-  # sawIntuitiveResearchKit has been compiled within cisst, we should
-  # find it automatically
-  find_package(sawIntuitiveResearchKit 2.4.0 REQUIRED)
+# sawControllers, for mtsPIDConfiguration.h -- mtsBilateralTeleOperationPSM
+# reads each arm's live PID "configuration" command directly (e.g. to
+# confirm use_disturbance_observer's actual running state), not just what
+# a JSON config file says
+find_package(sawControllers REQUIRED)
 
-  if (sawIntuitiveResearchKit_FOUND)
+# ONNX Runtime C++ SDK, used by mtsContactDetector for the contact
+# classification model. Not packaged by ROS/apt on this system, so it's a
+# vendored prebuilt release; hint at a couple of common locations and allow
+# override via the ONNXRUNTIME_ROOT environment variable.
+find_path (ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
+  HINTS
+    "$ENV{ONNXRUNTIME_ROOT}/include"
+    "$ENV{HOME}/software/onnxruntime-linux-x64-1.20.1/include"
+    "/opt/onnxruntime/include")
+find_library (ONNXRUNTIME_LIBRARY onnxruntime
+  HINTS
+    "$ENV{ONNXRUNTIME_ROOT}/lib"
+    "$ENV{HOME}/software/onnxruntime-linux-x64-1.20.1/lib"
+    "/opt/onnxruntime/lib")
 
-    set (saw_intuitive_research_kit_example_bilateral_teleop_INCLUDE_DIR
-      "${saw_intuitive_research_kit_example_bilateral_teleop_SOURCE_DIR}/include")
+if (NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIBRARY)
+  message (FATAL_ERROR
+    "ONNX Runtime C++ SDK not found. Download a prebuilt release from "
+    "https://github.com/microsoft/onnxruntime/releases (linux-x64 tgz), "
+    "extract it, and either place it at ~/software/onnxruntime-linux-x64-1.20.1 "
+    "or set the ONNXRUNTIME_ROOT environment variable to its install prefix.")
+endif ()
 
-    include_directories (
-      ${saw_intuitive_research_kit_example_bilateral_teleop_INCLUDE_DIR}
-      ${CMAKE_BINARY_DIR}
-      ${CMAKE_CURRENT_BINARY_DIR}
-      ${sawIntuitiveResearchKit_INCLUDE_DIR})
+# libonnxruntime.so lives outside any standard system lib path, so bake its
+# directory into the built library's RPATH -- otherwise it's only found at
+# runtime if LD_LIBRARY_PATH happens to be set
+get_filename_component (ONNXRUNTIME_LIBRARY_DIR "${ONNXRUNTIME_LIBRARY}" DIRECTORY)
 
-    link_directories (
-      ${sawIntuitiveResearchKit_LIBRARY_DIR})
+if (sawIntuitiveResearchKit_FOUND)
+
+  set (saw_intuitive_research_kit_example_bilateral_teleop_INCLUDE_DIR
+    "${saw_intuitive_research_kit_example_bilateral_teleop_SOURCE_DIR}/include")
+
+  include_directories (
+    ${saw_intuitive_research_kit_example_bilateral_teleop_INCLUDE_DIR}
+    ${CMAKE_BINARY_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${sawIntuitiveResearchKit_INCLUDE_DIR}
+    ${sawControllers_INCLUDE_DIR}
+    ${ONNXRUNTIME_INCLUDE_DIR})
+
+  link_directories (
+    ${sawIntuitiveResearchKit_LIBRARY_DIR}
+    ${sawControllers_LIBRARY_DIR})
 
 
-    set (BILATERAL_SOURCES
-         "include/mtsBilateralTeleOperationPSM.h"
-         "include/sawIntuitiveResearchKitBilateralTeleopExport.h"
-         "code/mtsBilateralTeleOperationPSM.cpp")
+  set (BILATERAL_SOURCES
+       "include/mtsBilateralTeleOperationPSM.h"
+       "include/sawIntuitiveResearchKitBilateralTeleopExport.h"
+       "code/mtsBilateralTeleOperationPSM.cpp"
+       "include/mtsContactDetector.h"
+       "code/mtsContactDetector.cpp"
+       "include/mtsDynamicsCompensator.h"
+       "code/mtsDynamicsCompensator.cpp")
 
-    if (ROS_VERSION)
-      set (BILATERAL_SOURCES ${BILATERAL_SOURCES}
-           "include/mtsBilateralTeleOperationPSMROSBridge.h"
-           "code/mtsBilateralTeleOperationPSMROSBridge.cpp")
-    endif ()
+  if (ROS_VERSION)
+    set (BILATERAL_SOURCES ${BILATERAL_SOURCES}
+         "include/mtsBilateralTeleOperationPSMROSBridge.h"
+         "code/mtsBilateralTeleOperationPSMROSBridge.cpp")
+  endif ()
 
-    add_library (sawIntuitiveResearchKitBilateralTeleop
-                 ${BILATERAL_SOURCES})
+  add_library (sawIntuitiveResearchKitBilateralTeleop
+               ${BILATERAL_SOURCES})
 
-    cisst_target_link_libraries (sawIntuitiveResearchKitBilateralTeleop
-                                 ${REQUIRED_CISST_LIBRARIES})
+  # base_dir used by mtsContactDetector to resolve relative onnx_model /
+  # normalization_json paths from the teleop JSON config; this package has
+  # no install() step for share/ today (dev-tree paths are used as-is,
+  # matching how MTML_PSM2_teleop_config.json itself is already located)
+  target_compile_definitions (sawIntuitiveResearchKitBilateralTeleop PRIVATE
+    BILATERAL_TELEOP_SHARE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../share")
 
-    # link against non cisst libraries and cisst components
-    target_link_libraries (sawIntuitiveResearchKitBilateralTeleop
-                           ${sawIntuitiveResearchKit_LIBRARIES})
+  set_target_properties (sawIntuitiveResearchKitBilateralTeleop PROPERTIES
+    BUILD_RPATH "${ONNXRUNTIME_LIBRARY_DIR}"
+    INSTALL_RPATH "${ONNXRUNTIME_LIBRARY_DIR}")
 
-    if (ROS_VERSION EQUAL 1)
-      target_link_libraries (sawIntuitiveResearchKitBilateralTeleop
-                             ${catkin_LIBRARIES})
-    endif ()
+  set (sawIntuitiveResearchKitBilateralTeleop_LINK_LIBRARIES
+       ${cisst_LIBRARIES}
+       ${sawIntuitiveResearchKit_LIBRARIES}
+       ${sawControllers_LIBRARIES}
+       ${ONNXRUNTIME_LIBRARY})
 
-    if (ROS_VERSION EQUAL 2)
-      ament_target_dependencies (
-        sawIntuitiveResearchKitBilateralTeleop
-        ${ROS2_depends}
-        )
-      ament_package ()
-    endif ()
+  if (ROS_VERSION EQUAL 1)
+    list (APPEND sawIntuitiveResearchKitBilateralTeleop_LINK_LIBRARIES
+          ${catkin_LIBRARIES})
+  endif ()
 
-  endif (sawIntuitiveResearchKit_FOUND)
+  target_link_libraries (sawIntuitiveResearchKitBilateralTeleop
+                         ${sawIntuitiveResearchKitBilateralTeleop_LINK_LIBRARIES})
 
-endif (cisst_FOUND_AS_REQUIRED)
+  if (ROS_VERSION EQUAL 2)
+    ament_target_dependencies (
+      sawIntuitiveResearchKitBilateralTeleop
+      ${ROS2_depends}
+      )
+    ament_package ()
+  endif ()
+
+endif (sawIntuitiveResearchKit_FOUND)

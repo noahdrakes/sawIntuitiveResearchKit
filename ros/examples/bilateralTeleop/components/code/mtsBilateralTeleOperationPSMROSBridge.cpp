@@ -35,12 +35,19 @@ void mtsBilateralTeleOperationPSMROSBridge::Configure(const std::string & teleop
     std::string ros_namespace = teleop_name;
     cisst_ral::clean_namespace(ros_namespace);
 
-    events_bridge().AddPublisherFromEventWrite<bool, CISST_RAL_MSG(std_msgs, Bool)>
-        ("Setting", "bilateral_enabled", ros_namespace + "/bilateral_enabled");
+    // "bilateral_enabled"/"set_bilateral_enabled" no longer exist on the
+    // component (replaced by "teleop_mode"/"set_teleop_mode" -- see
+    // mtsBilateralTeleOperationPSM's mode cleanup); bridging the old names
+    // here left this whole "Setting" interface connection failing at
+    // startup (cisst's BindCommands is all-or-nothing), silently taking
+    // set_teleop_mode/set_scale/lock_rotation/lock_translation/state_command
+    // down with it over ROS too, even though they're otherwise unaffected.
+    events_bridge().AddPublisherFromCommandRead<std::string, CISST_RAL_MSG(std_msgs, String)>
+        ("Setting", "teleop_mode", ros_namespace + "/teleop_mode");
 
-    subscribers_bridge().AddSubscriberToCommandWrite<bool, CISST_RAL_MSG(std_msgs, Bool)>
-        ("Setting", "set_bilateral_enabled",
-         ros_namespace + "/set_bilateral_enabled");
+    subscribers_bridge().AddSubscriberToCommandWrite<std::string, CISST_RAL_MSG(std_msgs, String)>
+        ("Setting", "set_teleop_mode",
+         ros_namespace + "/set_teleop_mode");
 
     mtsManagerLocal * manager = mtsComponentManager::GetInstance();
     manager->AddComponent(this);

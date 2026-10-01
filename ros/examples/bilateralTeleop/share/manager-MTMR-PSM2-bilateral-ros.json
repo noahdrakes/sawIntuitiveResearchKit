@@ -1,0 +1,57 @@
+{
+    "components":
+    [
+        {
+            "shared-library": "sawIntuitiveResearchKitBilateralTeleop",
+            "class-name": "mtsBilateralTeleOperationPSMROSBridge",
+            "constructor-arg": {
+                "Name": "MTMR_PSM2_Bilateral_Bridge",
+                "Period": 0.001
+            },
+            "configure-parameter": "MTMR_PSM2" 
+        }
+    ]
+    ,
+    "connections": [
+        {
+            "provided": {
+                "component": "PSM2",
+                "interface": "Arm"
+            },
+            "required": {
+                "component": "MTMR_PSM2",
+                "interface": "PSM2_Arm_force_source"
+            }
+        },
+        {
+            "provided": {
+                "component": "MTMR",
+                "interface": "Arm"
+            },
+            "required": {
+                "component": "MTMR_PSM2",
+                "interface": "MTMR_Arm_force_source"
+            }
+        },
+        {
+            "provided": {
+                "component": "PSM2_PID",
+                "interface": "Controller"
+            },
+            "required": {
+                "component": "MTMR_PSM2",
+                "interface": "PSM_PID"
+            }
+        },
+        {
+            "provided": {
+                "component": "MTMR_PID",
+                "interface": "Controller"
+            },
+            "required": {
+                "component": "MTMR_PSM2",
+                "interface": "MTM_PID"
+            }
+        }
+    ]
+}

@@ -5,7 +5,7 @@
   Author(s):  Brendan Burkhart
   Created on: 2025-01-23
 
-  (C) Copyright 2013-2023 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2013-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
   --- begin cisst license - do not edit ---
 
@@ -21,6 +21,10 @@
 
 // cisst includes
 #include <cisstMultiTask/mtsManagerLocal.h>
+
+#include <algorithm>
+#include <iostream>
+#include <vector>
 
 CMN_IMPLEMENT_SERVICES_DERIVED_ONEARG(mtsBilateralTeleOperationPSM,
                                       mtsTeleOperationPSM,
@@ -45,20 +49,122 @@ void mtsBilateralTeleOperationPSM::ForceSource::Configure(mtsBilateralTeleOperat
         function_name = value.asString();
     }
 
+    value = jsonConfig["body_cf_orientation_absolute"];
+    if (!value.empty()) {
+        body_cf_orientation_absolute = value.asBool();
+    }
+
     std::string required_interface_name = component_name + "_" + provided_interface_name + "_force_source";
     mtsInterfaceRequired* interface = teleop->AddInterfaceRequired(required_interface_name);
     if (interface) {
         interface->AddFunction(function_name, measured_cf);
+
+        if (body_cf_orientation_absolute) {
+            // derive the sibling setter from the function name, e.g.
+            // "body/measured_cf" -> "body/set_cf_orientation_absolute"
+            // (see mtsIntuitiveResearchKitArm::body_set_cf_orientation_absolute)
+            std::string setter_name = "set_cf_orientation_absolute";
+            auto slash = function_name.rfind('/');
+            if (slash != std::string::npos) {
+                setter_name = function_name.substr(0, slash) + "/" + setter_name;
+            }
+            interface->AddFunction(setter_name, set_cf_orientation_absolute, MTS_OPTIONAL);
+        }
     }
+}
+
+void mtsBilateralTeleOperationPSM::ForceSource::sample()
+{
+    if (body_cf_orientation_absolute && !m_orientation_absolute_applied
+        && set_cf_orientation_absolute.IsValid()) {
+        set_cf_orientation_absolute(true);
+        m_orientation_absolute_applied = true;
+    }
+    measured_cf(m_measured_cf);
 }
 
 void mtsBilateralTeleOperationPSM::Arm::populateInterface(mtsInterfaceRequired* interface)
 {
-    interface->AddFunction("servo_cpvf", servo_cpvf, MTS_OPTIONAL);
+    interface->AddFunction("servo_cs", servo_cs, MTS_OPTIONAL);
     interface->AddFunction("measured_cs", measured_cs, MTS_OPTIONAL);
+    interface->AddFunction("body/jacobian", jacobian_body, MTS_OPTIONAL);
 }
 
-prmStateCartesian mtsBilateralTeleOperationPSM::Arm::computeGoal(Arm* target, double scale)
+bool mtsBilateralTeleOperationPSM::Arm::dynamics_correction_wrench(vct6 & wrench_correction)
+{
+    // see reset_dynamics_cycle()
+    if (!m_dynamics_cycle_computed) {
+        m_dynamics_cycle_valid = compute_dynamics_correction_wrench(m_dynamics_cycle_correction);
+        m_dynamics_cycle_computed = true;
+    }
+    wrench_correction = m_dynamics_cycle_correction;
+    return m_dynamics_cycle_valid;
+}
+
+bool mtsBilateralTeleOperationPSM::Arm::compute_dynamics_correction_wrench(vct6 & wrench_correction)
+{
+    wrench_correction.SetAll(0.0);
+
+    if (!dynamics_compensation_enabled || !dynamics_compensator) {
+        return false;
+    }
+    if (!measured_js.IsValid() || !jacobian_body.IsValid()) {
+        return false;
+    }
+
+    measured_js(m_measured_js);
+    vct3 joint_position(m_measured_js.Position()[0], m_measured_js.Position()[1], m_measured_js.Position()[2]);
+
+    vct3 predicted_torque;
+    if (!dynamics_compensator->Update(joint_position, teleop->GetPeriodicity(), predicted_torque)) {
+        return false; // still filling the compensator's warmup window
+    }
+
+    jacobian_body(m_jacobian_body);
+    const size_t dof = m_jacobian_body.cols();
+    if (dof < 3) {
+        return false;
+    }
+
+    vctDoubleVec padded_effort(dof);
+    padded_effort.SetAll(0.0);
+    padded_effort[0] = predicted_torque[0];
+    padded_effort[1] = predicted_torque[1];
+    padded_effort[2] = predicted_torque[2];
+
+    // pinv(J_body^T) maps joint-space effort to Cartesian wrench, same
+    // formula mtsIntuitiveResearchKitArm.cpp uses for body/measured_cf
+    // itself -- allocate the SVD workspace once (sizes never change after
+    // the first successful jacobian read), then just re-assign+re-invert
+    // each cycle
+    if (!m_jacobian_pinverse_allocated) {
+        m_jacobian_body_transpose.ForceAssign(m_jacobian_body.Transpose());
+        m_jacobian_pinverse_data.Allocate(m_jacobian_body_transpose);
+        m_jacobian_pinverse_allocated = true;
+    } else {
+        m_jacobian_body_transpose.Assign(m_jacobian_body.Transpose());
+    }
+    nmrPInverse(m_jacobian_body_transpose, m_jacobian_pinverse_data);
+
+    vctDoubleVec wrench(6);
+    wrench.ProductOf(m_jacobian_pinverse_data.PInverse(), padded_effort);
+    wrench_correction.Assign(wrench);
+    return true;
+}
+
+void mtsBilateralTeleOperationPSM::Arm::apply_dynamics_correction(prmStateCartesian & state)
+{
+    if (!state.ForceIsValid()) {
+        return;
+    }
+    vct6 correction;
+    if (dynamics_correction_wrench(correction)) {
+        state.Force() -= correction;
+    }
+}
+
+prmStateCartesian mtsBilateralTeleOperationPSM::Arm::computeGoal(Arm* target, double scale,
+                                                                  double target_force_scale, double current_force_scale)
 {
     prmStateCartesian goal;
     prmStateCartesian target_state = target->state();
@@ -82,7 +188,7 @@ prmStateCartesian mtsBilateralTeleOperationPSM::Arm::computeGoal(Arm* target, do
 
     prmStateCartesian current_state = state();
     if (target_state.ForceIsValid() && current_state.ForceIsValid()) {
-        goal.Force() = -target_state.Force() - current_state.Force();
+        goal.Force() = -(target_force_scale * target_state.Force()) - (current_force_scale * current_state.Force());
     }
     goal.ForceIsValid() = target_state.ForceIsValid() && current_state.ForceIsValid();
 
@@ -95,9 +201,10 @@ prmStateCartesian mtsBilateralTeleOperationPSM::Arm::state()
     measured_cs(measured_state);
 
     if (force_source) {
-        force_source->measured_cf(force_source->m_measured_cf);
+        force_source->sample();
         measured_state.Force() = force_source->m_measured_cf.Force();
         measured_state.ForceIsValid() = force_source->m_measured_cf.Valid();
+        apply_dynamics_correction(measured_state);
     }
 
     return measured_state;
@@ -105,10 +212,10 @@ prmStateCartesian mtsBilateralTeleOperationPSM::Arm::state()
 
 void mtsBilateralTeleOperationPSM::Arm::servo(prmStateCartesian goal)
 {
-    servo_cpvf(goal);
+    servo_cs(goal);
 }
 
-vctFrm4x4& mtsBilateralTeleOperationPSM::ArmMTM::ClutchOrigin() { return teleop->mMTM.CartesianInitial; }
+vctFrm4x4& mtsBilateralTeleOperationPSM::ArmMTM::ClutchOrigin() { return teleop->mMTM.m_pose_initial; }
 
 prmStateCartesian mtsBilateralTeleOperationPSM::ArmMTM::state()
 {
@@ -131,9 +238,10 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmMTM::state()
     }
 
     if (force_source) {
-        force_source->measured_cf(force_source->m_measured_cf);
+        force_source->sample();
         state.Force() = force_source->m_measured_cf.Force();
         state.ForceIsValid() = force_source->m_measured_cf.Valid();
+        apply_dynamics_correction(state);
     } else {
         state.ForceIsValid() = false;
     }
@@ -143,8 +251,8 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmMTM::state()
 
 void mtsBilateralTeleOperationPSM::ArmMTM::servo(prmStateCartesian goal)
 {
-    // Use servo_cpvf if available, otherwise fall back to servo_cp
-    if (servo_cpvf.IsValid()) {
+    // Use servo_cs if available, otherwise fall back to servo_cp
+    if (servo_cs.IsValid()) {
         Arm::servo(goal);
     } else {
         prmPositionCartesianSet& servo = teleop->mArmMTM.m_servo_cp;
@@ -162,7 +270,7 @@ void mtsBilateralTeleOperationPSM::ArmMTM::servo(prmStateCartesian goal)
     }
 }
 
-vctFrm4x4& mtsBilateralTeleOperationPSM::ArmPSM::ClutchOrigin() { return teleop->mPSM.CartesianInitial; };
+vctFrm4x4& mtsBilateralTeleOperationPSM::ArmPSM::ClutchOrigin() { return teleop->mPSM.m_pose_initial; };
 
 prmStateCartesian mtsBilateralTeleOperationPSM::ArmPSM::state()
 {
@@ -171,7 +279,7 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmPSM::state()
     }
 
     // measured_cs not available, fall back to measured_cp/measured_cv
-    
+
     prmStateCartesian state;
     teleop->mArmPSM.measured_cp(teleop->mArmPSM.m_measured_cp);
     state.Position() = teleop->mArmPSM.m_measured_cp.Position();
@@ -184,9 +292,10 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmPSM::state()
     state.VelocityIsValid() = psm_velocity.Valid();
 
     if (force_source) {
-        force_source->measured_cf(force_source->m_measured_cf);
+        force_source->sample();
         state.Force() = force_source->m_measured_cf.Force();
         state.ForceIsValid() = force_source->m_measured_cf.Valid();
+        apply_dynamics_correction(state);
     } else {
         state.ForceIsValid() = false;
     }
@@ -196,8 +305,8 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmPSM::state()
 
 void mtsBilateralTeleOperationPSM::ArmPSM::servo(prmStateCartesian goal)
 {
-    // Use servo_cpvf if available, otherwise fall back to servo_cp
-    if (servo_cpvf.IsValid()) {
+    // Use servo_cs if available, otherwise fall back to servo_cp
+    if (servo_cs.IsValid()) {
         Arm::servo(goal);
     } else {
         prmPositionCartesianSet& servo = teleop->mPSM.m_servo_cp;
@@ -223,32 +332,46 @@ mtsBilateralTeleOperationPSM::mtsBilateralTeleOperationPSM(const mtsTaskPeriodic
     mtsTeleOperationPSM(arg), mArmMTM(this), mArmPSM(this) { Init(); }
 
 void mtsBilateralTeleOperationPSM::Init() {
-    m_bilateral_enabled = true;
-
     mtsInterfaceRequired* interface;
 
     interface = GetInterfaceRequired("MTM");
     if (interface) {
         interface->AddFunction("servo_cp", mArmMTM.servo_cp);
+        interface->AddFunction("measured_js", mArmMTM.measured_js, MTS_OPTIONAL);
         mArmMTM.populateInterface(interface);
     }
 
     interface = GetInterfaceRequired("PSM");
     if (interface) {
         interface->AddFunction("measured_cp", mArmPSM.measured_cp);
+        interface->AddFunction("measured_js", mArmPSM.measured_js, MTS_OPTIONAL);
         mArmPSM.populateInterface(interface);
     }
 
-    mConfigurationStateTable->AddData(m_bilateral_enabled, "bilateral_enabled");
+    // see m_psm_pid_configuration/m_mtm_pid_configuration
+    interface = AddInterfaceRequired("PSM_PID");
+    if (interface) {
+        interface->AddFunction("configuration", m_psm_pid_configuration, MTS_OPTIONAL);
+        interface->AddFunction("configure", m_psm_pid_configure, MTS_OPTIONAL);
+    }
+    interface = AddInterfaceRequired("MTM_PID");
+    if (interface) {
+        interface->AddFunction("configuration", m_mtm_pid_configuration, MTS_OPTIONAL);
+        interface->AddFunction("configure", m_mtm_pid_configure, MTS_OPTIONAL);
+    }
+
+    mConfigurationStateTable->AddData(m_teleop_mode, "teleop_mode");
 
     mtsInterfaceProvided* setting_interface = GetInterfaceProvided("Setting");
     if (setting_interface) {
-        setting_interface->AddCommandWrite(&mtsBilateralTeleOperationPSM::set_bilateral_enabled, this,
-                                        "set_bilateral_enabled", m_bilateral_enabled);
+        setting_interface->AddCommandWrite(&mtsBilateralTeleOperationPSM::set_teleop_mode, this,
+                                        "set_teleop_mode", m_teleop_mode);
         setting_interface->AddCommandReadState(*(mConfigurationStateTable),
-                                        m_bilateral_enabled, "bilateral_enabled");
-        setting_interface->AddEventWrite(bilateral_enabled_event,
-                                    "bilateral_enabled", m_bilateral_enabled);
+                                        m_teleop_mode, "teleop_mode");
+        setting_interface->AddCommandWrite(&mtsBilateralTeleOperationPSM::set_psm_disturbance_observer,
+                                        this, "set_psm_disturbance_observer", false);
+        setting_interface->AddCommandWrite(&mtsBilateralTeleOperationPSM::set_mtm_disturbance_observer,
+                                        this, "set_mtm_disturbance_observer", false);
     }
 }
 
@@ -275,33 +398,334 @@ void mtsBilateralTeleOperationPSM::Configure(const Json::Value & jsonConfig)
     if (!jsonValue.empty()) {
         m_mtm_torque_gain = jsonValue.asDouble();
     }
+
+    jsonValue = jsonConfig["mtm_force_gain"];
+    if (!jsonValue.empty()) {
+        m_mtm_force_gain = jsonValue.asDouble();
+    }
+
+    jsonValue = jsonConfig["psm_force_scale"];
+    if (!jsonValue.empty()) {
+        m_psm_force_scale = jsonValue.asDouble();
+    }
+
+    jsonValue = jsonConfig["contact_detection"];
+    if (!jsonValue.empty()) {
+        m_contact_detector = std::make_unique<mtsContactDetector>();
+        m_contact_detector->Configure(jsonValue, BILATERAL_TELEOP_SHARE_DIR);
+        // no contact info yet -- start soft rather than assuming contact
+        m_in_contact = false;
+    }
+
+    jsonValue = jsonConfig["dynamics_compensation"];
+    if (!jsonValue.empty()) {
+        Json::Value model_dir_value = jsonValue["psm_model_dir"];
+        if (!model_dir_value.empty()) {
+            Json::Value compensator_config;
+            compensator_config["model_dir"] = model_dir_value;
+            m_psm_dynamics_compensator = std::make_unique<mtsDynamicsCompensator>();
+            m_psm_dynamics_compensator->Configure(compensator_config, BILATERAL_TELEOP_SHARE_DIR);
+            mArmPSM.dynamics_compensator = m_psm_dynamics_compensator.get();
+        }
+        model_dir_value = jsonValue["mtm_model_dir"];
+        if (!model_dir_value.empty()) {
+            Json::Value compensator_config;
+            compensator_config["model_dir"] = model_dir_value;
+            m_mtm_dynamics_compensator = std::make_unique<mtsDynamicsCompensator>();
+            m_mtm_dynamics_compensator->Configure(compensator_config, BILATERAL_TELEOP_SHARE_DIR);
+            mArmMTM.dynamics_compensator = m_mtm_dynamics_compensator.get();
+        }
+    }
+
+    jsonValue = jsonConfig["teleop_mode"];
+    if (!jsonValue.empty()) {
+        set_teleop_mode(jsonValue.asString());
+    } else {
+        // set_teleop_mode() below prints this same summary as a side
+        // effect, but if "teleop_mode" wasn't in the JSON at all, it never
+        // gets called -- print it here instead so startup always shows
+        // what actually loaded, regardless of whether teleop_mode was set
+        print_configuration_summary();
+    }
 }
 
-void mtsBilateralTeleOperationPSM::set_bilateral_enabled(const bool & enabled)
+namespace {
+    // prints "ON/off/MIXED (name=val, ...)" for the first 3 joints. Two
+    // overloads: one formats an already-fetched mtsPIDConfiguration
+    // directly, the other reads live from PID first -- kept separate
+    // because a config this process just wrote and a config freshly
+    // re-read from PID are not interchangeable (see set_disturbance_observer).
+    void print_disturbance_observer_status(std::ostream & out, const mtsPIDConfiguration & config)
+    {
+        if (config.empty()) {
+            out << "connected, but PID returned no joints\n";
+            return;
+        }
+        const size_t n = std::min<size_t>(3, config.size());
+        bool any_on = false;
+        bool any_off = false;
+        for (size_t i = 0; i < n; i++) {
+            (config.at(i).use_disturbance_observer ? any_on : any_off) = true;
+        }
+        out << (any_on && any_off ? "MIXED" : (any_on ? "ON" : "off")) << "  (";
+        for (size_t i = 0; i < n; i++) {
+            const auto & axis = config.at(i);
+            out << axis.name << "=" << (axis.use_disturbance_observer ? "on" : "off");
+            if (i + 1 < n) { out << ", "; }
+        }
+        out << ")\n";
+    }
+
+    // reads live from PID first -- for general status display, not right
+    // after a write (see set_disturbance_observer)
+    void print_disturbance_observer_status(std::ostream & out, const mtsFunctionRead & pid_configuration)
+    {
+        if (!pid_configuration.IsValid()) {
+            out << "not connected (see manager JSON: needs a connection to "
+                   "<arm>_PID's \"Controller\" interface)\n";
+            return;
+        }
+        mtsPIDConfiguration config;
+        pid_configuration(config);
+        print_disturbance_observer_status(out, config);
+    }
+}
+
+void mtsBilateralTeleOperationPSM::print_configuration_summary(void) const
 {
+    // recomputed from m_teleop_mode rather than read from
+    // Arm::dynamics_compensation_enabled, which is only updated inside
+    // RunCartesianTeleop() on the periodic task's own thread and so can be
+    // one cycle stale here -- must match that predicate exactly
+    const bool mode_uses_dynamics_compensation = (m_teleop_mode == "bilateral2" || m_teleop_mode == "contact2");
+
+    std::cout << "======================================================\n"
+              << "mtsBilateralTeleOperationPSM [" << this->GetName() << "] configuration:\n"
+              << "  teleop_mode:          \"" << m_teleop_mode << "\"\n"
+              << "  contact_detection:    "
+              << (m_contact_detector ? "CONFIGURED" : "not configured") << "\n"
+              << "  dynamics_compensation:\n"
+              << "    psm_model_dir:      "
+              << (mArmPSM.dynamics_compensator ? "CONFIGURED" : "not configured")
+              << (mode_uses_dynamics_compensation ? "  [ACTIVE in this mode]" : "  [inactive in this mode]") << "\n"
+              << "    mtm_model_dir:      "
+              << (mArmMTM.dynamics_compensator ? "CONFIGURED" : "not configured")
+              << (mode_uses_dynamics_compensation ? "  [ACTIVE in this mode]" : "  [inactive in this mode]") << "\n"
+              << "  disturbance_observer (live, read from PID -- not the JSON file):\n"
+              << "    PSM: ";
+    print_disturbance_observer_status(std::cout, m_psm_pid_configuration);
+    std::cout << "    MTM: ";
+    print_disturbance_observer_status(std::cout, m_mtm_pid_configuration);
+    std::cout << "======================================================" << std::endl;
+}
+
+void mtsBilateralTeleOperationPSM::set_disturbance_observer(const bool & enable, const mtsFunctionRead & get_config,
+                                                              const mtsFunctionWrite & set_config,
+                                                              const std::string & arm_label)
+{
+    if (!get_config.IsValid() || !set_config.IsValid()) {
+        if (mInterface) {
+            mInterface->SendError(this->GetName() + ": set_" + arm_label
+                                   + "_disturbance_observer: PID_config connection not wired "
+                                   + "(see manager JSON) -- can't read or write live PID configuration");
+        }
+        return;
+    }
+    mtsPIDConfiguration config;
+    get_config(config);
+    for (auto & axis : config) {
+        axis.use_disturbance_observer = enable;
+    }
+    set_config(config);
+
+    // print from the local config we just sent, not a fresh read from PID:
+    // "configure" is a queued write, only applied on PID's own task's next
+    // cycle, so reading it back immediately here would race that and could
+    // print the stale, pre-write value (this is what previously made it
+    // look like a command had no effect until a second, redundant call).
+    std::cout << arm_label << " disturbance_observer -> ";
+    print_disturbance_observer_status(std::cout, config);
+}
+
+void mtsBilateralTeleOperationPSM::set_psm_disturbance_observer(const bool & enable)
+{
+    set_disturbance_observer(enable, m_psm_pid_configuration, m_psm_pid_configure, "psm");
+}
+
+void mtsBilateralTeleOperationPSM::set_mtm_disturbance_observer(const bool & enable)
+{
+    set_disturbance_observer(enable, m_mtm_pid_configuration, m_mtm_pid_configure, "mtm");
+}
+
+void mtsBilateralTeleOperationPSM::set_teleop_mode(const std::string & mode)
+{
+    static const std::vector<std::string> valid_modes = {
+        "bilateral", "contact", "unilateral", "bilateral2", "contact2"
+    };
+    if (std::find(valid_modes.begin(), valid_modes.end(), mode) == valid_modes.end()) {
+        if (mInterface) {
+            mInterface->SendError(this->GetName() + ": set_teleop_mode: unknown mode \"" + mode + "\"");
+        }
+        return;
+    }
     mConfigurationStateTable->Start();
-    m_bilateral_enabled = enabled;
+    m_teleop_mode = mode;
     mConfigurationStateTable->Advance();
-    bilateral_enabled_event(m_bilateral_enabled);
+
+    // see print_configuration_summary()
+    print_configuration_summary();
 }
 
 void mtsBilateralTeleOperationPSM::RunCartesianTeleop()
 {
-    // fall back to default behavior when in unilateral mode
-    if (!m_bilateral_enabled) {
-        mtsTeleOperationPSM::RunCartesianTeleop();
-        return;
-    }
-
     if (m_clutched) {
         return;
     }
 
-    auto psm_goal = mArmPSM.computeGoal(&mArmMTM, m_config.scale);
+    // exactly once per cycle, regardless of mode -- see
+    // Arm::reset_dynamics_cycle()'s comment for why this matters
+    mArmPSM.reset_dynamics_cycle();
+    mArmMTM.reset_dynamics_cycle();
+
+    // "contact" and "contact2" share identical gating -- they only differ
+    // in the in-contact control law itself, below
+    const bool is_contact_mode = (m_teleop_mode == "contact"
+        || m_teleop_mode == "contact2");
+
+    // see m_teleop_mode's comment for "bilateral2"/"contact2"; toggled
+    // every cycle so switching modes at runtime takes effect immediately
+    const bool dynamics_compensation_mode = (m_teleop_mode == "bilateral2"
+        || m_teleop_mode == "contact2");
+    if (dynamics_compensation_mode && !m_dynamics_compensation_was_active) {
+        // just switched in -- force a fresh warmup rather than a spurious
+        // velocity spike from a stale previous position (see
+        // m_dynamics_compensation_was_active)
+        if (mArmPSM.dynamics_compensator) {
+            mArmPSM.dynamics_compensator->Reset();
+        }
+        if (mArmMTM.dynamics_compensator) {
+            mArmMTM.dynamics_compensator->Reset();
+        }
+    }
+    m_dynamics_compensation_was_active = dynamics_compensation_mode;
+    mArmPSM.dynamics_compensation_enabled = dynamics_compensation_mode;
+    mArmMTM.dynamics_compensation_enabled = dynamics_compensation_mode;
+
+    if (is_contact_mode && m_contact_detector && mArmPSM.measured_js.IsValid()) {
+        mtsContactDetector::Signals signals;
+
+        mArmPSM.measured_js(mArmPSM.m_measured_js);
+        signals.psm_position = mArmPSM.m_measured_js.Position();
+        signals.psm_velocity = mArmPSM.m_measured_js.Velocity();
+        signals.psm_effort = mArmPSM.m_measured_js.Effort();
+
+        if (mArmMTM.measured_js.IsValid()) {
+            mArmMTM.measured_js(mArmMTM.m_measured_js);
+            signals.mtm_position = mArmMTM.m_measured_js.Position();
+            signals.mtm_velocity = mArmMTM.m_measured_js.Velocity();
+            signals.mtm_effort = mArmMTM.m_measured_js.Effort();
+        }
+
+        // body-frame Cartesian force, linear only -- same signals already
+        // used for the bilateral force goals below
+        signals.psm_force = mArmPSM.state().Force().Ref<3>(0);
+        signals.mtm_force = mArmMTM.state().Force().Ref<3>(0);
+
+        double probability;
+        m_in_contact = m_contact_detector->Update(signals, probability);
+    }
+
+    // "unilateral": MTM is never coupled at all, position or force -- same
+    // out-of-contact treatment as "contact", just unconditional (see below).
+    // "bilateral": always fully coupled, ignore contact entirely.
+    // "contact": gated by the detector (updated above).
+    const bool out_of_contact = (m_teleop_mode == "unilateral")
+        || (is_contact_mode && !m_in_contact);
+
+    if (!out_of_contact && m_mtm_was_released) {
+        // re-engaging after the MTM was released: release_mtm() puts it in
+        // true EFFORT_MODE, completely free to be moved, so it may have
+        // drifted far from wherever ClutchOrigin()/m_pose_initial was last
+        // set. Without this, the first engaged cycle's computeGoal() would
+        // compute a position target from that stale anchor and servo_cs's
+        // stiff PID would snap straight to it -- that's the large,
+        // direction-depends-on-how-far-it-drifted force/"magnetic" feeling
+        // right at the moment coupling engages. UpdateInitialState()
+        // resyncs both arms' anchors to their current positions, same as
+        // the base class does when resuming tracking after a clutch, so
+        // this cycle's goal starts at zero position error instead.
+        UpdateInitialState();
+    }
+    if (out_of_contact && !m_mtm_was_released
+        && (m_teleop_mode == "contact" || m_teleop_mode == "unilateral")) {
+        // both "contact"'s out-of-contact path and "unilateral" fall back to
+        // the base class's own RunCartesianTeleop() below, which never
+        // touches MTM's commanded force itself -- it just replays
+        // m_following_mtm_body_servo_cf (see its own body_servo_cf call),
+        // whatever that was last set to. Without this one-time release
+        // right at the transition, MTM would keep applying whatever
+        // nonzero wrench the previous (coupled) branch last commanded,
+        // forever.
+        release_mtm();
+    }
+    m_mtm_was_released = out_of_contact;
+
+    if ((m_teleop_mode == "contact" || m_teleop_mode == "unilateral") && out_of_contact) {
+        // fall back to the base class's own control law entirely -- see
+        // m_teleop_mode's header comment for why "unilateral" was previously
+        // kept on its own separate release_mtm()-based path instead of
+        // sharing this one, and why that reasoning no longer holds
+        mtsTeleOperationPSM::RunCartesianTeleop();
+        return;
+    }
+
+    // "contact" and "unilateral" both returned above -- from here down,
+    // out_of_contact can only still be true for "contact2" (it keeps its
+    // own release_mtm()-based zeroing instead of the base class fallback,
+    // see m_teleop_mode's "contact2" comment)
+    auto psm_goal = mArmPSM.computeGoal(&mArmMTM, m_config.scale, 1.0, m_psm_force_scale);
+    if (out_of_contact) {
+        psm_goal.Force().SetAll(0.0);
+    }
     mArmPSM.servo(psm_goal);
 
-    auto mtm_goal = mArmMTM.computeGoal(&mArmPSM, 1.0 / m_config.scale);
+    if (out_of_contact) {
+        // let the MTM go free instead of servoing it to any position/force goal
+        release_mtm();
+        return;
+    }
+
+    auto mtm_goal = mArmMTM.computeGoal(&mArmPSM, 1.0 / m_config.scale, m_psm_force_scale, 1.0);
+
     // scale MTM torque goal to reduce oscillations
     mtm_goal.Force().Ref<3>(3) = m_mtm_torque_gain * mtm_goal.Force().Ref<3>(3);
+    mtm_goal.Force().Ref<3>(0) = m_mtm_force_gain * mtm_goal.Force().Ref<3>(0);
+
     mArmMTM.servo(mtm_goal);
+}
+
+void mtsBilateralTeleOperationPSM::command_mtm_wrench(const vct6 & force)
+{
+    if (!m_config.MTM_is_haptic) {
+        return;
+    }
+    if (mMTM.use_gravity_compensation.IsValid()) {
+        mMTM.use_gravity_compensation(true);
+    }
+    if (mMTM.body_servo_cf.IsValid()) {
+        prmForceCartesianSet wrench;
+        wrench.Force() = force;
+        mMTM.body_servo_cf(wrench);
+        m_following_mtm_body_servo_cf = wrench;
+    }
+    if (m_config.rotation_locked && mMTM.lock_orientation.IsValid()) {
+        mMTM.lock_orientation(mMTM.m_measured_cp.Position().Rotation());
+    } else if (mMTM.unlock_orientation.IsValid()) {
+        mMTM.unlock_orientation();
+    }
+}
+
+void mtsBilateralTeleOperationPSM::release_mtm()
+{
+    command_mtm_wrench(vct6(0.0));
 }
