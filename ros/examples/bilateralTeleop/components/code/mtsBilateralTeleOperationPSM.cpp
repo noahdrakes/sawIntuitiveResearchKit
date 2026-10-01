@@ -87,80 +87,6 @@ void mtsBilateralTeleOperationPSM::Arm::populateInterface(mtsInterfaceRequired* 
 {
     interface->AddFunction("servo_cs", servo_cs, MTS_OPTIONAL);
     interface->AddFunction("measured_cs", measured_cs, MTS_OPTIONAL);
-    interface->AddFunction("body/jacobian", jacobian_body, MTS_OPTIONAL);
-}
-
-bool mtsBilateralTeleOperationPSM::Arm::dynamics_correction_wrench(vct6 & wrench_correction)
-{
-    // see reset_dynamics_cycle()
-    if (!m_dynamics_cycle_computed) {
-        m_dynamics_cycle_valid = compute_dynamics_correction_wrench(m_dynamics_cycle_correction);
-        m_dynamics_cycle_computed = true;
-    }
-    wrench_correction = m_dynamics_cycle_correction;
-    return m_dynamics_cycle_valid;
-}
-
-bool mtsBilateralTeleOperationPSM::Arm::compute_dynamics_correction_wrench(vct6 & wrench_correction)
-{
-    wrench_correction.SetAll(0.0);
-
-    if (!dynamics_compensation_enabled || !dynamics_compensator) {
-        return false;
-    }
-    if (!measured_js.IsValid() || !jacobian_body.IsValid()) {
-        return false;
-    }
-
-    measured_js(m_measured_js);
-    vct3 joint_position(m_measured_js.Position()[0], m_measured_js.Position()[1], m_measured_js.Position()[2]);
-
-    vct3 predicted_torque;
-    if (!dynamics_compensator->Update(joint_position, teleop->GetPeriodicity(), predicted_torque)) {
-        return false; // still filling the compensator's warmup window
-    }
-
-    jacobian_body(m_jacobian_body);
-    const size_t dof = m_jacobian_body.cols();
-    if (dof < 3) {
-        return false;
-    }
-
-    vctDoubleVec padded_effort(dof);
-    padded_effort.SetAll(0.0);
-    padded_effort[0] = predicted_torque[0];
-    padded_effort[1] = predicted_torque[1];
-    padded_effort[2] = predicted_torque[2];
-
-    // pinv(J_body^T) maps joint-space effort to Cartesian wrench, same
-    // formula mtsIntuitiveResearchKitArm.cpp uses for body/measured_cf
-    // itself -- allocate the SVD workspace once (sizes never change after
-    // the first successful jacobian read), then just re-assign+re-invert
-    // each cycle
-    if (!m_jacobian_pinverse_allocated) {
-        m_jacobian_body_transpose.ForceAssign(m_jacobian_body.Transpose());
-        m_jacobian_pinverse_data.Allocate(m_jacobian_body_transpose);
-        m_jacobian_pinverse_allocated = true;
-    } else {
-        m_jacobian_body_transpose.Assign(m_jacobian_body.Transpose());
-    }
-    nmrPInverse(m_jacobian_body_transpose, m_jacobian_pinverse_data);
-
-    vctDoubleVec wrench(6);
-    wrench.ProductOf(m_jacobian_pinverse_data.PInverse(), padded_effort);
-    wrench_correction.Assign(wrench);
-    return true;
-}
-
-void mtsBilateralTeleOperationPSM::Arm::apply_dynamics_correction(prmStateCartesian & state)
-{
-    if (!state.ForceIsValid()) {
-        return;
-    }
-    vct6 correction;
-    if (dynamics_correction_wrench(correction)) {
-        state.Force() -= correction;
-    }
 }
 
 prmStateCartesian mtsBilateralTeleOperationPSM::Arm::computeGoal(Arm* target, double scale,
@@ -204,7 +130,6 @@ prmStateCartesian mtsBilateralTeleOperationPSM::Arm::state()
         force_source->sample();
         measured_state.Force() = force_source->m_measured_cf.Force();
         measured_state.ForceIsValid() = force_source->m_measured_cf.Valid();
-        apply_dynamics_correction(measured_state);
     }
 
     return measured_state;
@@ -241,7 +166,6 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmMTM::state()
         force_source->sample();
         state.Force() = force_source->m_measured_cf.Force();
         state.ForceIsValid() = force_source->m_measured_cf.Valid();
-        apply_dynamics_correction(state);
     } else {
         state.ForceIsValid() = false;
     }
@@ -295,7 +219,6 @@ prmStateCartesian mtsBilateralTeleOperationPSM::ArmPSM::state()
         force_source->sample();
         state.Force() = force_source->m_measured_cf.Force();
         state.ForceIsValid() = force_source->m_measured_cf.Valid();
-        apply_dynamics_correction(state);
     } else {
         state.ForceIsValid() = false;
     }
@@ -417,26 +340,6 @@ void mtsBilateralTeleOperationPSM::Configure(const Json::Value & jsonConfig)
         m_in_contact = false;
     }
 
-    jsonValue = jsonConfig["dynamics_compensation"];
-    if (!jsonValue.empty()) {
-        Json::Value model_dir_value = jsonValue["psm_model_dir"];
-        if (!model_dir_value.empty()) {
-            Json::Value compensator_config;
-            compensator_config["model_dir"] = model_dir_value;
-            m_psm_dynamics_compensator = std::make_unique<mtsDynamicsCompensator>();
-            m_psm_dynamics_compensator->Configure(compensator_config, BILATERAL_TELEOP_SHARE_DIR);
-            mArmPSM.dynamics_compensator = m_psm_dynamics_compensator.get();
-        }
-        model_dir_value = jsonValue["mtm_model_dir"];
-        if (!model_dir_value.empty()) {
-            Json::Value compensator_config;
-            compensator_config["model_dir"] = model_dir_value;
-            m_mtm_dynamics_compensator = std::make_unique<mtsDynamicsCompensator>();
-            m_mtm_dynamics_compensator->Configure(compensator_config, BILATERAL_TELEOP_SHARE_DIR);
-            mArmMTM.dynamics_compensator = m_mtm_dynamics_compensator.get();
-        }
-    }
-
     jsonValue = jsonConfig["teleop_mode"];
     if (!jsonValue.empty()) {
         set_teleop_mode(jsonValue.asString());
@@ -493,24 +396,11 @@ namespace {
 
 void mtsBilateralTeleOperationPSM::print_configuration_summary(void) const
 {
-    // recomputed from m_teleop_mode rather than read from
-    // Arm::dynamics_compensation_enabled, which is only updated inside
-    // RunCartesianTeleop() on the periodic task's own thread and so can be
-    // one cycle stale here -- must match that predicate exactly
-    const bool mode_uses_dynamics_compensation = (m_teleop_mode == "bilateral2" || m_teleop_mode == "contact2");
-
     std::cout << "======================================================\n"
               << "mtsBilateralTeleOperationPSM [" << this->GetName() << "] configuration:\n"
               << "  teleop_mode:          \"" << m_teleop_mode << "\"\n"
               << "  contact_detection:    "
               << (m_contact_detector ? "CONFIGURED" : "not configured") << "\n"
-              << "  dynamics_compensation:\n"
-              << "    psm_model_dir:      "
-              << (mArmPSM.dynamics_compensator ? "CONFIGURED" : "not configured")
-              << (mode_uses_dynamics_compensation ? "  [ACTIVE in this mode]" : "  [inactive in this mode]") << "\n"
-              << "    mtm_model_dir:      "
-              << (mArmMTM.dynamics_compensator ? "CONFIGURED" : "not configured")
-              << (mode_uses_dynamics_compensation ? "  [ACTIVE in this mode]" : "  [inactive in this mode]") << "\n"
               << "  disturbance_observer (live, read from PID -- not the JSON file):\n"
               << "    PSM: ";
     print_disturbance_observer_status(std::cout, m_psm_pid_configuration);
@@ -560,7 +450,7 @@ void mtsBilateralTeleOperationPSM::set_mtm_disturbance_observer(const bool & ena
 void mtsBilateralTeleOperationPSM::set_teleop_mode(const std::string & mode)
 {
     static const std::vector<std::string> valid_modes = {
-        "bilateral", "contact", "unilateral", "bilateral2", "contact2"
+        "bilateral", "contact", "unilateral", "contact2"
     };
     if (std::find(valid_modes.begin(), valid_modes.end(), mode) == valid_modes.end()) {
         if (mInterface) {
@@ -582,34 +472,10 @@ void mtsBilateralTeleOperationPSM::RunCartesianTeleop()
         return;
     }
 
-    // exactly once per cycle, regardless of mode -- see
-    // Arm::reset_dynamics_cycle()'s comment for why this matters
-    mArmPSM.reset_dynamics_cycle();
-    mArmMTM.reset_dynamics_cycle();
-
     // "contact" and "contact2" share identical gating -- they only differ
     // in the in-contact control law itself, below
     const bool is_contact_mode = (m_teleop_mode == "contact"
         || m_teleop_mode == "contact2");
-
-    // see m_teleop_mode's comment for "bilateral2"/"contact2"; toggled
-    // every cycle so switching modes at runtime takes effect immediately
-    const bool dynamics_compensation_mode = (m_teleop_mode == "bilateral2"
-        || m_teleop_mode == "contact2");
-    if (dynamics_compensation_mode && !m_dynamics_compensation_was_active) {
-        // just switched in -- force a fresh warmup rather than a spurious
-        // velocity spike from a stale previous position (see
-        // m_dynamics_compensation_was_active)
-        if (mArmPSM.dynamics_compensator) {
-            mArmPSM.dynamics_compensator->Reset();
-        }
-        if (mArmMTM.dynamics_compensator) {
-            mArmMTM.dynamics_compensator->Reset();
-        }
-    }
-    m_dynamics_compensation_was_active = dynamics_compensation_mode;
-    mArmPSM.dynamics_compensation_enabled = dynamics_compensation_mode;
-    mArmMTM.dynamics_compensation_enabled = dynamics_compensation_mode;
 
     if (is_contact_mode && m_contact_detector && mArmPSM.measured_js.IsValid()) {
         mtsContactDetector::Signals signals;

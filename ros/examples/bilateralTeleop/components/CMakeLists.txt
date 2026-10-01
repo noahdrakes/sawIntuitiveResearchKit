@@ -128,9 +128,7 @@ if (sawIntuitiveResearchKit_FOUND)
        "include/sawIntuitiveResearchKitBilateralTeleopExport.h"
        "code/mtsBilateralTeleOperationPSM.cpp"
        "include/mtsContactDetector.h"
-       "code/mtsContactDetector.cpp"
-       "include/mtsDynamicsCompensator.h"
-       "code/mtsDynamicsCompensator.cpp")
+       "code/mtsContactDetector.cpp")
 
   if (ROS_VERSION)
     set (BILATERAL_SOURCES ${BILATERAL_SOURCES}

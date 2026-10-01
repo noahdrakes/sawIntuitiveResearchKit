@@ -30,11 +30,9 @@ http://www.cisst.org/cisst/license.txt.
 
 #include <memory>
 
-#include <cisstNumerical/nmrPInverse.h>
 #include <sawControllers/mtsPIDConfiguration.h>
 
 #include "mtsContactDetector.h"
-#include "mtsDynamicsCompensator.h"
 
 // Always include last
 #include <sawIntuitiveResearchKitBilateralTeleopExport.h>
@@ -53,13 +51,8 @@ public:
     // switches m_teleop_mode (see its own comment below for the valid
     // values and what each does), and re-prints print_configuration_summary()
     // on every switch, not just at startup -- so it's always obvious in the
-    // console which mode just took effect and whether the dynamics
-    // compensation/contact detection models it depends on are actually
-    // loaded. Switching into "bilateral2"/"contact2" without a
-    // dynamics_compensation model_dir configured looks identical to
-    // "bilateral"/"contact", which has repeatedly been the wrong conclusion
-    // to jump to ("must be a bug") when it was actually just config not
-    // loaded yet.
+    // console which mode just took effect and whether the contact
+    // detection model it depends on is actually loaded.
     void set_teleop_mode(const std::string & mode);
 
 protected:
@@ -109,34 +102,8 @@ protected:
         virtual prmStateCartesian state();
         virtual void servo(prmStateCartesian goal);
 
-        // dynamics compensation ("bilateral2"/"contact2" modes only): not
-        // owned, points into mtsBilateralTeleOperationPSM's
-        // m_psm_dynamics_compensator/m_mtm_dynamics_compensator, null if
-        // that arm has no "dynamics_compensation" model_dir configured.
-        // enabled is toggled every cycle in RunCartesianTeleop() based on
-        // the current teleop_mode, so switching modes at runtime turns the
-        // correction on/off without touching the compensator itself (which
-        // keeps its own running finite-difference-velocity/window state
-        // regardless, same as the contact detector keeps running in every
-        // mode).
-        mtsDynamicsCompensator* dynamics_compensator = nullptr;
-        bool dynamics_compensation_enabled = false;
-
-        // state() is called multiple times per RunCartesianTeleop() cycle
-        // (once for the contact detector's signal gathering, once as
-        // "current" and once more as the other arm's "target" inside each
-        // computeGoal() call) -- without this cache,
-        // dynamics_compensator->Update() would run 2-3x per real control
-        // tick, corrupting its internal finite-difference velocity and
-        // rolling seq_len window. Call reset_dynamics_cycle() exactly once
-        // per RunCartesianTeleop() invocation (regardless of mode) so the
-        // first state() call each cycle computes fresh and the rest reuse it.
-        void reset_dynamics_cycle() { m_dynamics_cycle_computed = false; }
-
         mtsFunctionRead measured_js;
         prmStateJoint m_measured_js;
-        mtsFunctionRead jacobian_body;
-        vctDoubleMat m_jacobian_body;
 
     protected:
         mtsBilateralTeleOperationPSM* teleop;
@@ -144,37 +111,6 @@ protected:
 
         mtsFunctionWrite servo_cs;
         mtsFunctionRead measured_cs;
-
-        // subtracts the dynamics compensator's predicted own-dynamics
-        // wrench from state.Force(), if enabled/configured and the
-        // compensator has finished its warmup window -- shared by
-        // Arm::state() and ArmMTM/ArmPSM::state()'s measured_cs-unavailable
-        // fallback branches, all three of which populate Force() from
-        // force_source independently
-        void apply_dynamics_correction(prmStateCartesian & state);
-
-    private:
-        // per-cycle cache -- see reset_dynamics_cycle() above
-        bool dynamics_correction_wrench(vct6 & wrench_correction);
-        bool m_dynamics_cycle_computed = false;
-        bool m_dynamics_cycle_valid = false;
-        vct6 m_dynamics_cycle_correction;
-
-        // does the actual computation for dynamics_correction_wrench(),
-        // called at most once per cycle. Maps the compensator's predicted
-        // 3-joint torque correction into a Cartesian wrench via
-        // pinv(J_body^T), the same way mtsIntuitiveResearchKitArm computes
-        // body/measured_cf from raw joint effort -- see
-        // mtsIntuitiveResearchKitArm.cpp's use of
-        // m_jacobian_transpose_pinverse_data. Returns false (wrench_correction
-        // left zeroed) if compensation is disabled/unconfigured, the
-        // required signals aren't valid yet, or the compensator is still in
-        // its post-Configure (or post-Reset()) warmup window.
-        bool compute_dynamics_correction_wrench(vct6 & wrench_correction);
-
-        vctDoubleMat m_jacobian_body_transpose;
-        nmrPInverseDynamicData m_jacobian_pinverse_data;
-        bool m_jacobian_pinverse_allocated = false;
     };
 
     class ArmMTM : public Arm {
@@ -228,7 +164,7 @@ protected:
     // tracking anchor -- see the UpdateInitialState() call there
     bool m_mtm_was_released = false;
 
-    // which of five ways the MTM's coupling is gated, runtime-settable via
+    // which of four ways the MTM's coupling is gated, runtime-settable via
     // set_teleop_mode for A/B testing (e.g. a user study) without editing
     // config or rebuilding:
     //   "bilateral"   -- always fully coupled, contact detection ignored,
@@ -269,38 +205,13 @@ protected:
     //                    (mistaken -- see "contact" above) discontinuity
     //                    concern; unified once the real cause (DO state,
     //                    not the fallback itself) was identified.
-    //   "bilateral2"  -- identical control law to "bilateral", except each
-    //                    arm's own measured_cf has its own-dynamics
-    //                    (inertia/gravity/friction/cable coupling) estimate
-    //                    subtracted out first, via a learned per-arm
-    //                    inverse-dynamics model (see mtsDynamicsCompensator
-    //                    and dynamics_estimation/train.py) -- only active if
-    //                    the corresponding "dynamics_compensation" model_dir
-    //                    was configured for that arm, otherwise identical to
-    //                    "bilateral"
-    //   "contact2"    -- same contact-detector gating as "contact", with the
-    //                    same dynamics-compensated force as "bilateral2"
-    //                    once in contact -- but unlike "contact", out of
+    //   "contact2"    -- same contact-detector gating and in-contact
+    //                    control law as "contact" -- but unlike "contact", out of
     //                    contact it still uses release_mtm()-based zeroing
     //                    (PSM force zeroed, MTM released), not the base
     //                    class fallback -- the two aren't identical out of
     //                    contact
     std::string m_teleop_mode = "contact";
-
-    // per-arm learned inverse-dynamics models for "bilateral2"/"contact2";
-    // null (compensation simply never applies) unless "dynamics_compensation"
-    // configures that arm's model_dir. Arm::dynamics_compensator points into
-    // these (not owned there) once configured.
-    std::unique_ptr<mtsDynamicsCompensator> m_psm_dynamics_compensator;
-    std::unique_ptr<mtsDynamicsCompensator> m_mtm_dynamics_compensator;
-    // true whenever last cycle was "bilateral2"/"contact2" -- lets
-    // RunCartesianTeleop() detect switching *into* one of those modes (from
-    // any other mode, e.g. A/B testing via set_teleop_mode) and Reset()
-    // both compensators, same reasoning as the MTM release/re-engage reset:
-    // Update() doesn't run at all while dynamics_compensation_enabled is
-    // false, so resuming without a reset would compute a spurious velocity
-    // spike from however long ago the mode last had it enabled.
-    bool m_dynamics_compensation_was_active = false;
 
     // reads the *live* PID configuration (not the JSON file on disk, which
     // can be edited/reloaded independently and drift out of sync with
@@ -339,8 +250,8 @@ protected:
     void command_mtm_wrench(const vct6 & force);
     void release_mtm();
 
-    // prints current teleop_mode plus whether contact_detection/
-    // dynamics_compensation actually loaded a model for each arm --
+    // prints current teleop_mode plus whether contact_detection actually
+    // loaded a model --
     // printed once at Configure() and again on every set_teleop_mode()
     // switch, so it's always obvious in the console without querying the
     // interpreter separately. Deliberately plain std::cout, not CMN_LOG/

@@ -21,10 +21,6 @@
         "probability_threshold": 0.5,
         "debounce_samples_in": 5,
         "debounce_samples_out": 1
-    },
-    "dynamics_compensation": {
-        "psm_model_dir": "/home/ndrakes1/force_estimation/contact_detection/dynamics_estimation/checkpoints_freespace2/psm_dynamics",
-        "mtm_model_dir": "/home/ndrakes1/force_estimation/contact_detection/dynamics_estimation/checkpoints_freespace2/mtm_dynamics"
     }
 }
     
