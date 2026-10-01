@@ -3,7 +3,7 @@ sawIntuitiveResearchKit
 
 # Bilateral Controller
 
-This forked repo contains all of the code used to run my bilateral controller. In your dVRK workspace, rm -rf sawIntuitiveResearchKit dir in your ros2 workspace under src, cp this repo in your ros2 workspace, then colcon build. Inside of the bilateral controller folder
+This forked repo contains all of the code used to run my bilateral controller. In your dVRK workspace, rm -rf sawIntuitiveResearchKit dir in your ros2 workspace under src/cisst-saw, cp this repo in your ros2 workspace, then colcon build. Inside of the bilateral controller folder
 ros/examples/bilateralTeleop, move the config files in the share folder into your dVRK config folder. For this application to run, set the contact detection model path in MTMR_PSM2_teleop_config.json. 
 The contact detection model paths lives in contact_detection/model/deployable_models/
 
