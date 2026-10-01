@@ -215,7 +215,7 @@ void mtsBilateralTeleOperationPSM::Arm::servo(prmStateCartesian goal)
     servo_cs(goal);
 }
 
-vctFrm4x4& mtsBilateralTeleOperationPSM::ArmMTM::ClutchOrigin() { return teleop->mMTM.m_pose_initial; }
+vctFrm4x4& mtsBilateralTeleOperationPSM::ArmMTM::ClutchOrigin() { return teleop->mMTM.CartesianInitial; }
 
 prmStateCartesian mtsBilateralTeleOperationPSM::ArmMTM::state()
 {
@@ -270,7 +270,7 @@ void mtsBilateralTeleOperationPSM::ArmMTM::servo(prmStateCartesian goal)
     }
 }
 
-vctFrm4x4& mtsBilateralTeleOperationPSM::ArmPSM::ClutchOrigin() { return teleop->mPSM.m_pose_initial; };
+vctFrm4x4& mtsBilateralTeleOperationPSM::ArmPSM::ClutchOrigin() { return teleop->mPSM.CartesianInitial; };
 
 prmStateCartesian mtsBilateralTeleOperationPSM::ArmPSM::state()
 {

@@ -61,6 +61,9 @@ set (
 
 find_package (cisst REQUIRED COMPONENTS ${REQUIRED_CISST_LIBRARIES})
 
+# load cisst configuration
+include (${CISST_USE_FILE})
+
 # set paths
 cisst_set_output_path ()
 
