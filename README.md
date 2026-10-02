@@ -15,7 +15,7 @@ This is used to efficiently run the deep learning model for contact detection.
 
 This forked repo contains all of the code used to run my bilateral controller. In your dVRK workspace, rm -rf sawIntuitiveResearchKit dir in your ros2 workspace under src/cisst-saw, cp this repo in your ros2 workspace, then colcon build. Inside of the bilateral controller folder
 ros/examples/bilateralTeleop, move the config files and study_gui.py script in the share folder into your dVRK config folder. For this application to run, set the contact detection model path in MTMR_PSM2_teleop_config.json. 
-The contact detection model paths lives in contact_detection/model/deployable_models/ . The model used in the paper lives in 
+The contact detection model paths lives in contact_detection/model/deployable_models/ . The model used in the paper lives in [Force Estimation](https://github.com/noahdrakes/force_estimation.git) under contact_detection/model/deployable_models/icra_2027/training_enter0.2_exit2.0_features_first3joints_psm_mtm_lstm_seq5/lstm/gray_foam_heldout
 
 ## run
 To run the bilateral controller in the embedded python interpreter, run this command: 
