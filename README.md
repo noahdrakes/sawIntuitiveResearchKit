@@ -1,6 +1,8 @@
 sawIntuitiveResearchKit
 =======================
 
+_valid for dvrk software v2.4.0_
+
 # Bilateral Controller
 
 ## dependecies
