@@ -2,7 +2,7 @@
   Author(s):  Brendan Burkhart
   Created on: 2025-06-08
 
-  (C) Copyright 2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2025-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -36,7 +36,7 @@ Editor::Editor(ConfigSources& config_sources, SystemLauncher& launcher, QWidget*
     int default_font_size = no_tabs_view->font().pointSize();
     no_tabs_view->setStyleSheet("color: palette(text); font-size: " + QString::number(3 * default_font_size / 2) + "pt");
     no_tabs_view->setAlignment(Qt::AlignCenter);
-    no_tabs_view->setMargin(10);
+    no_tabs_view->setContentsMargins(10, 10, 10, 10);
     // Add empty, not enabled dummy tab
     tabs->addTab(no_tabs_view, QString());
     tabs->setTabEnabled(0, false);
@@ -74,7 +74,7 @@ void Editor::openConfig() {
     QString dir = QString();
     auto source_dir = config_sources->dir();
     if (source_dir.has_value()) {
-        dir = QString::fromStdString(source_dir.value());
+        dir = QString::fromStdString(source_dir.value().generic_string());
     }
 
     QString file_name = QFileDialog::getOpenFileName(this, "Open system config", dir, "Config file (*.json)");

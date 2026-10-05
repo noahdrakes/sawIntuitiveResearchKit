@@ -29,6 +29,7 @@ http://www.cisst.org/cisst/license.txt.
 #include <QScrollBar>
 #include <QCloseEvent>
 #include <QCoreApplication>
+#include <QDoubleSpinBox>
 
 // cisst
 #include <cisstMultiTask/mtsInterfaceRequired.h>
@@ -46,6 +47,7 @@ mtsIntuitiveResearchKitArmQtWidget::mtsIntuitiveResearchKitArmQtWidget(const std
     DirectControl(false),
     LogEnabled(false)
 {
+    this->AddTag("UI");
     QMMessage = new mtsMessageQtWidget();
     QPOState = new prmOperatingStateQtWidget();
 

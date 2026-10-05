@@ -1,5 +1,5 @@
 #
-# (C) Copyright 2011-2025 Johns Hopkins University (JHU), All Rights Reserved.
+# (C) Copyright 2011-2026 Johns Hopkins University (JHU), All Rights Reserved.
 #
 # --- begin cisst license - do not edit ---
 #
@@ -10,7 +10,7 @@
 # --- end cisst license ---
 
 cmake_minimum_required(VERSION 3.16)
-project (saw_intuitive_research_kit_example_psm_derived VERSION 2.4.0)
+project (saw_intuitive_research_kit_example_psm_derived VERSION 2.5.0)
 
 # first test for ROS1
 set (ROS1_depends
@@ -59,63 +59,63 @@ set (
   cisstParameterTypes
   cisstRobot
   cisstNumerical
-  cisstQt)
+)
 
-find_package (cisst REQUIRED ${REQUIRED_CISST_LIBRARIES})
+find_package (cisst 1.5 REQUIRED COMPONENTS ${REQUIRED_CISST_LIBRARIES})
 
-if (cisst_FOUND_AS_REQUIRED)
-  # load cisst configuration
-  include (${CISST_USE_FILE})
+# set paths
+cisst_set_output_path ()
 
-  # set paths
-  cisst_set_output_path ()
+# sawIntuitiveResearchKit has been compiled within cisst, we should
+# find it automatically
+find_package(sawIntuitiveResearchKit 2.5.0 REQUIRED)
 
-  # sawIntuitiveResearchKit has been compiled within cisst, we should
-  # find it automatically
-  find_package(sawIntuitiveResearchKit 2.4.0 REQUIRED)
+# use the Qt major version selected by cisst
+if (NOT (CISST_QT_VERSION STREQUAL "6" OR CISST_QT_VERSION STREQUAL "5"))
+  message (FATAL_ERROR "CISST_QT_VERSION must be 6 or 5 for ${PROJECT_NAME}")
+endif ()
+find_package (Qt${CISST_QT_VERSION} REQUIRED COMPONENTS Widgets Core)
 
-  if (sawIntuitiveResearchKit_FOUND)
+if (sawIntuitiveResearchKit_FOUND)
 
-    # for Qt widgets
-    set (CMAKE_AUTOMOC ON)
+  # for Qt widgets
+  set (CMAKE_AUTOMOC ON)
+  set (CMAKE_INCLUDE_CURRENT_DIR ON)
 
-    set (saw_intuitive_research_kit_example_psm_derived_INCLUDE_DIR
-      "${saw_intuitive_research_kit_example_psm_derived_SOURCE_DIR}/include")
+  set (saw_intuitive_research_kit_example_psm_derived_INCLUDE_DIR
+    "${saw_intuitive_research_kit_example_psm_derived_SOURCE_DIR}/include")
 
-    include_directories (
-      ${saw_intuitive_research_kit_example_psm_derived_INCLUDE_DIR}
-      ${CMAKE_BINARY_DIR}
-      ${CMAKE_CURRENT_BINARY_DIR}
-      ${sawIntuitiveResearchKit_INCLUDE_DIR}
-      ${catkin_INCLUDE_DIRS})
+  include_directories (
+    ${saw_intuitive_research_kit_example_psm_derived_INCLUDE_DIR}
+    ${CMAKE_BINARY_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${sawIntuitiveResearchKit_INCLUDE_DIR}
+    ${catkin_INCLUDE_DIRS})
 
-    link_directories (
-      ${sawIntuitiveResearchKit_LIBRARY_DIR})
+  link_directories (
+    ${sawIntuitiveResearchKit_LIBRARY_DIR})
 
-    add_library (sawIntuitiveResearchKitDerivedPSM
-      "include/mtsDerivedPSM.h"
-      "include/mtsDerivedPSMQtWidget.h"
-      "include/mtsDerivedPSMROSBridge.h"
-      "code/mtsDerivedPSM.cpp"
-      "code/mtsDerivedPSMQtWidget.cpp"
-      "code/mtsDerivedPSMROSBridge.cpp")
+  add_library (sawIntuitiveResearchKitDerivedPSM
+    "include/mtsDerivedPSM.h"
+    "include/mtsDerivedPSMQtWidget.h"
+    "include/mtsDerivedPSMROSBridge.h"
+    "code/mtsDerivedPSM.cpp"
+    "code/mtsDerivedPSMQtWidget.cpp"
+    "code/mtsDerivedPSMROSBridge.cpp")
 
-    cisst_target_link_libraries (sawIntuitiveResearchKitDerivedPSM
-      ${REQUIRED_CISST_LIBRARIES})
+  target_link_libraries (sawIntuitiveResearchKitDerivedPSM
+    ${cisst_LIBRARIES}
+    ${sawIntuitiveResearchKit_LIBRARIES}
+    Qt${CISST_QT_VERSION}::Core
+    Qt${CISST_QT_VERSION}::Widgets
+    ${catkin_LIBRARIES})
 
-    # link against non cisst libraries and cisst components
-    target_link_libraries (sawIntuitiveResearchKitDerivedPSM
-      ${sawIntuitiveResearchKit_LIBRARIES}
-      ${catkin_LIBRARIES})
+  if (ROS_VERSION EQUAL 2)
+    ament_target_dependencies (
+      sawIntuitiveResearchKitDerivedPSM
+      ${ROS2_depends}
+      )
+    ament_package ()
+  endif ()
 
-    if (ROS_VERSION EQUAL 2)
-      ament_target_dependencies (
-        sawIntuitiveResearchKitDerivedPSM
-        ${ROS2_depends}
-        )
-      ament_package ()
-    endif ()
-
-  endif (sawIntuitiveResearchKit_FOUND)
-
-endif (cisst_FOUND_AS_REQUIRED)
+endif (sawIntuitiveResearchKit_FOUND)

@@ -1,5 +1,5 @@
 #
-# (C) Copyright 2020-2025 Johns Hopkins University (JHU), All Rights Reserved.
+# (C) Copyright 2020-2026 Johns Hopkins University (JHU), All Rights Reserved.
 #
 # --- begin cisst license - do not edit ---
 #
@@ -10,7 +10,7 @@
 # --- end cisst license ---
 
 cmake_minimum_required (VERSION 3.16)
-project (dvrk_arms_from_ros VERSION 2.4.0)
+project (dvrk_arms_from_ros VERSION 2.5.0)
 
 
 # first test for ROS1
@@ -51,7 +51,6 @@ endif (catkin_FOUND)
 # find cisst and make sure the required libraries have been compiled
 set (REQUIRED_CISST_LIBRARIES
   cisstCommon
-  cisstCommonXML
   cisstCommonQt
   cisstVector
   cisstOSAbstraction
@@ -59,47 +58,40 @@ set (REQUIRED_CISST_LIBRARIES
   cisstParameterTypes
   )
 
-find_package (cisst 1.3.1 REQUIRED ${REQUIRED_CISST_LIBRARIES})
+find_package (cisst 1.5 REQUIRED COMPONENTS ${REQUIRED_CISST_LIBRARIES})
 
-if (cisst_FOUND_AS_REQUIRED)
+# set paths
+cisst_set_output_path ()
 
-    # load cisst configuration
-  include (${CISST_USE_FILE})
+include_directories (
+  ${dvrk_arms_from_ros_SOURCE_DIR}/include
+  ${CATKIN_DEVEL_PREFIX}/include
+  )
 
-  # set paths
-  cisst_set_output_path ()
+add_library (dvrk_arm_from_ros
+  include/dvrk_arm_from_ros.h
+  include/dvrk_psm_from_ros.h
+  include/dvrk_mtm_from_ros.h
+  src/dvrk_arm_from_ros.cpp
+  src/dvrk_psm_from_ros.cpp
+  src/dvrk_mtm_from_ros.cpp)
 
-  include_directories (
-    ${dvrk_arms_from_ros_SOURCE_DIR}/include
-    ${CATKIN_DEVEL_PREFIX}/include
+# target_link_libraries (
+#  dvrk_arm_from_ros
+#  ${catkin_LIBRARIES}
+#  )
+target_link_libraries (dvrk_arm_from_ros ${cisst_LIBRARIES})
+
+install (TARGETS dvrk_arm_from_ros
+  LIBRARY DESTINATION lib/${PROJECT_NAME}
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+  LIBRARY DESTINATION lib
+  INCLUDES DESTINATION include)
+
+if (ROS_VERSION EQUAL 2)
+  ament_target_dependencies (
+    dvrk_arm_from_ros
+    ${ROS2_depends}
     )
-
-  add_library (dvrk_arm_from_ros
-    include/dvrk_arm_from_ros.h
-    include/dvrk_psm_from_ros.h
-    include/dvrk_mtm_from_ros.h
-    src/dvrk_arm_from_ros.cpp
-    src/dvrk_psm_from_ros.cpp
-    src/dvrk_mtm_from_ros.cpp)
-
-  # target_link_libraries (
-  #  dvrk_arm_from_ros
-  #  ${catkin_LIBRARIES}
-  #  )
-  cisst_target_link_libraries (dvrk_arm_from_ros ${REQUIRED_CISST_LIBRARIES})
-
-  install (TARGETS dvrk_arm_from_ros
-    LIBRARY DESTINATION lib/${PROJECT_NAME}
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-    LIBRARY DESTINATION lib
-    INCLUDES DESTINATION include)
-
-  if (ROS_VERSION EQUAL 2)
-    ament_target_dependencies (
-      dvrk_arm_from_ros
-      ${ROS2_depends}
-      )
-    ament_package ()
-  endif ()
-
-endif (cisst_FOUND_AS_REQUIRED)
+  ament_package ()
+endif ()

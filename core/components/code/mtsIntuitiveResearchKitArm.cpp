@@ -5,7 +5,7 @@
   Author(s):  Anton Deguet, Zihan Chen, Zerui Wang
   Created on: 2016-02-24
 
-  (C) Copyright 2013-2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2013-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -675,15 +675,15 @@ void mtsIntuitiveResearchKitArm::Configure(const std::string & filename)
 
         // optionally disable GC
         const Json::Value jsonSkipGC = jsonConfig["skip_gravity_compensation"];
-        bool skip_GC = false;
+        m_skip_gravity_compensation = false;
         if (jsonSkipGC.isBool()) {
-            skip_GC = jsonSkipGC.asBool();
-            if (skip_GC) {
+            m_skip_gravity_compensation = jsonSkipGC.asBool();
+            if (m_skip_gravity_compensation) {
                 CMN_LOG_CLASS_INIT_WARNING << "Configure " << this->GetName()
                                            << ": ignoring gravity compensation because skip_gravity_compensation is set to True" << std::endl;
             }
         }
-        if (!skip_GC) {
+        if (!m_skip_gravity_compensation) {
             // arm specific configuration for gravity compensation
             ConfigureGC(jsonConfig, configPath, filename);
         }
@@ -815,6 +815,7 @@ void mtsIntuitiveResearchKitArm::ConfigureDH(const std::string & filename)
 
 void mtsIntuitiveResearchKitArm::Startup(void)
 {
+    m_cleanup_done = false;
     SetDesiredState("DISABLED");
     trajectory_j_set_ratio(mtsIntuitiveResearchKit::JointTrajectory::ratio);
 }
@@ -837,6 +838,11 @@ void mtsIntuitiveResearchKitArm::Run(void)
 
 void mtsIntuitiveResearchKitArm::Cleanup(void)
 {
+    if (m_cleanup_done) {
+        return;
+    }
+    m_cleanup_done = true;
+
     // engage brakes
     if (has_brakes()) {
         IO.BrakeEngage();
@@ -857,17 +863,26 @@ void mtsIntuitiveResearchKitArm::Cleanup(void)
     CMN_LOG_CLASS_INIT_VERBOSE << GetName() << ": Cleanup" << std::endl;
 }
 
-void mtsIntuitiveResearchKitArm::set_simulated(void)
+void mtsIntuitiveResearchKitArm::set_simulation_mode(const prmSimulationType & mode)
 {
-    m_simulated = true;
-    // in simulation mode, we don't need IO
-    RemoveInterfaceRequired("RobotIO");
+    m_simulation_mode = mode;
+    switch (mode) {
+    case prmSimulationType::NONE:
+        break;
+    case prmSimulationType::KINEMATIC:
+        // in simulation mode, we don't need IO
+        RemoveInterfaceRequired("RobotIO");
+    case prmSimulationType::IO:
+        break;
+    default:
+        cmnThrow("mtsPID::set_simulation_mode received unsupported mode");
+    }
 }
 
 void mtsIntuitiveResearchKitArm::get_robot_data(void)
 {
     // check that the robot still has power
-    if (m_powered && !m_simulated) {
+    if (m_powered && !(m_simulation_mode == prmSimulationType::KINEMATIC)) {
         vctBoolVec actuatorAmplifiersStatus(number_of_joints());
         IO.GetActuatorAmpStatus(actuatorAmplifiersStatus);
         vctBoolVec brakeAmplifiersStatus(number_of_brakes());
@@ -1198,7 +1213,7 @@ void mtsIntuitiveResearchKitArm::EnterPowering(void)
 
     m_powered = false;
 
-    if (m_simulated) {
+    if (m_simulation_mode == prmSimulationType::KINEMATIC) {
         PID.enable_measured_setpoint_check(false);
         PID.enable(true);
         PID.enable_joints(vctBoolVec(number_of_joints(), true));
@@ -1227,7 +1242,7 @@ void mtsIntuitiveResearchKitArm::EnterPowering(void)
 
 void mtsIntuitiveResearchKitArm::TransitionPowering(void)
 {
-    if (m_simulated) {
+    if (m_simulation_mode == prmSimulationType::KINEMATIC) {
         mArmState.SetCurrentState("ENABLED");
         return;
     }
@@ -1256,7 +1271,7 @@ void mtsIntuitiveResearchKitArm::EnterEnabled(void)
 {
     UpdateOperatingStateAndBusy(prmOperatingState::ENABLED, false);
 
-    if (m_simulated) {
+    if (m_simulation_mode == prmSimulationType::KINEMATIC) {
         m_powered = true;
         return;
     }
@@ -1292,7 +1307,7 @@ void mtsIntuitiveResearchKitArm::EnterCalibratingEncodersFromPots(void)
     UpdateOperatingStateAndBusy(prmOperatingState::ENABLED, true);
 
     // if simulated, no need to bias encoders
-    if (m_simulated) {
+    if (m_simulation_mode == prmSimulationType::KINEMATIC) {
         m_arm_interface->SendStatus(this->GetName() + ": simulated mode, no need to calibrate encoders");
         return;
     }
@@ -1322,7 +1337,7 @@ void mtsIntuitiveResearchKitArm::EnterCalibratingEncodersFromPots(void)
 
 void mtsIntuitiveResearchKitArm::TransitionCalibratingEncodersFromPots(void)
 {
-    if (m_simulated || m_encoders_biased_from_pots) {
+    if ((m_simulation_mode == prmSimulationType::KINEMATIC) || m_encoders_biased_from_pots) {
         m_encoders_biased_from_pots = true;
         mArmState.SetCurrentState("ENCODERS_BIASED");
         return;
@@ -1370,7 +1385,7 @@ void mtsIntuitiveResearchKitArm::EnterHoming(void)
     PID.enable_measured_setpoint_check(true);
 
     // release brakes if any
-    if ((has_brakes()) && !m_simulated) {
+    if ((has_brakes()) && (m_simulation_mode != prmSimulationType::KINEMATIC)) {
         IO.BrakeRelease();
     }
 
@@ -1456,7 +1471,7 @@ void mtsIntuitiveResearchKitArm::EnterHomed(void)
     SetControlSpaceAndMode(mtsIntuitiveResearchKitControlTypes::UNDEFINED_SPACE,
                            mtsIntuitiveResearchKitControlTypes::UNDEFINED_MODE);
 
-    if (m_simulated) {
+    if (m_simulation_mode == prmSimulationType::KINEMATIC) {
         return;
     }
 
