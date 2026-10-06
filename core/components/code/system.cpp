@@ -5,7 +5,7 @@
   Author(s):  Anton Deguet
   Created on: 2013-05-17
 
-  (C) Copyright 2013-2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2013-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -32,6 +32,7 @@ http://www.cisst.org/cisst/license.txt.
 #include <sawIntuitiveResearchKit/sawIntuitiveResearchKitConfig.h>
 #include <sawIntuitiveResearchKit/sawIntuitiveResearchKitRevision.h>
 #include <sawIntuitiveResearchKit/mtsIntuitiveResearchKit.h>
+#include <sawIntuitiveResearchKit/mtsIntuitiveResearchKitArm.h>
 #include <sawIntuitiveResearchKit/IO_proxy.h>
 #include <sawIntuitiveResearchKit/arm_proxy.h>
 #include <sawIntuitiveResearchKit/console.h>
@@ -296,13 +297,6 @@ void dvrk::system::Configure(const std::string & filename)
         add_arm_interfaces(arm_proxy);
     }
 
-    // load consoles if any
-    for (auto & iter : m_consoles) {
-        auto & console = iter.second;
-        console->create_components();
-        add_console_interfaces(console);
-    }
-
     // search for SUJs, real, not Fixed
     for (auto & iter : m_arm_proxies) {
         auto & arm_proxy = iter.second;
@@ -310,6 +304,58 @@ void dvrk::system::Configure(const std::string & filename)
             || (arm_proxy->m_config->type == dvrk::arm_type::SUJ_Si)) {
             m_SUJ = arm_proxy;
         }
+    }
+
+    // Load SUJ Si IO configurations if applicable
+    if (m_SUJ && m_SUJ->m_config->type == dvrk::arm_type::SUJ_Si && m_SUJ->m_config->simulation == prmSimulationType::NONE) {
+        std::ifstream jsonStream;
+        jsonStream.open(m_SUJ->m_arm_configuration_file.c_str());
+        Json::Value jsonConfig;
+        Json::Reader jsonReader;
+        if (!jsonReader.parse(jsonStream, jsonConfig)) {
+            CMN_LOG_CLASS_INIT_ERROR << "Configure: failed to parse SUJ configuration file \""
+                                     << m_SUJ->m_arm_configuration_file << "\"\n"
+                                     << jsonReader.getFormattedErrorMessages();
+            exit(EXIT_FAILURE);
+        }
+        const Json::Value jsonArms = jsonConfig["arms"];
+        for (unsigned int index = 0; index < jsonArms.size(); ++index) {
+            Json::Value jsonArm = jsonArms[index];
+            std::string name = jsonArm["name"].asString();
+            std::string serial;
+            auto iter = m_arm_proxies.find(name);
+            if (iter != m_arm_proxies.end()) {
+                serial = iter->second->m_config->serial;
+            }
+            if (serial == "" && !jsonArm["serial_number"].isNull()) {
+                serial = jsonArm["serial_number"].asString();
+            }
+            std::string sujSiFileName = "sawRobotIO1394-SUJ-Si-" + name + "-" + serial + ".json";
+            std::string full_path = this->find_file(sujSiFileName);
+            if (full_path != "") {
+                auto iter = m_arm_proxies.find(name);
+                if (iter != m_arm_proxies.end()) {
+                    auto & arm_proxy = iter->second;
+                    auto io_iter = m_IO_proxies.find(arm_proxy->m_IO_component_name);
+                    if (io_iter != m_IO_proxies.end()) {
+                        auto & IO_proxy = io_iter->second;
+                        CMN_LOG_CLASS_INIT_VERBOSE << "Configure: configuring IO component \"" << arm_proxy->m_IO_component_name
+                                                   << "\" with SUJ-Si file \"" << full_path << "\"" << std::endl;
+                        IO_proxy->configure(full_path);
+                    }
+                }
+            } else {
+                CMN_LOG_CLASS_INIT_WARNING << "Configure: SUJ-Si IO configuration file \"" << sujSiFileName
+                                           << "\" not found. Skipping IO configuration for " << name << "." << std::endl;
+            }
+        }
+    }
+
+    // load consoles if any
+    for (auto & iter : m_consoles) {
+        auto & console = iter.second;
+        console->create_components();
+        add_console_interfaces(console);
     }
 
     if (m_SUJ) {
@@ -320,7 +366,7 @@ void dvrk::system::Configure(const std::string & filename)
             if ((arm_proxy->m_config->native_or_derived_PSM()
                  || arm_proxy->m_config->native_or_derived_ECM()
                  )
-                && (arm_proxy->m_config->simulation == dvrk::simulation::SIMULATION_NONE)
+                && (arm_proxy->m_config->simulation == prmSimulationType::NONE)
                 ) {
                 arm_proxy->SUJInterfaceRequiredFromIO = this->AddInterfaceRequired("SUJ_clutch_" + name + "_IO");
                 arm_proxy->SUJInterfaceRequiredFromIO->AddEventHandlerWrite(&dvrk::arm_proxy::SUJ_clutch_event_handler_from_IO,
@@ -455,6 +501,16 @@ void dvrk::system::Run(void)
 
 void dvrk::system::Cleanup(void)
 {
+    // RobotIO components are registered before arm components and are
+    // therefore cleaned up first by the component manager.  Run arm cleanup
+    // here, while RobotIO is still available, so the shutdown LED pattern is
+    // transmitted to the hardware.
+    for (auto & iter : m_arm_proxies) {
+        if (iter.second->m_arm) {
+            iter.second->m_arm->Cleanup();
+        }
+    }
+
     CMN_LOG_CLASS_INIT_VERBOSE << "Cleanup" << std::endl;
 }
 
@@ -561,6 +617,10 @@ bool dvrk::system::add_arm_interfaces(std::shared_ptr<dvrk::arm_proxy> _arm)
 
 bool dvrk::system::add_console_interfaces(std::shared_ptr<dvrk::console> _console)
 {
+    const auto has_foot_pedal = [](const auto & cfg) {
+        return !cfg.component.empty() && !cfg.interface.empty();
+    };
+
     // main interface
     _console->m_interface_provided = this->AddInterfaceProvided(_console->m_name);
     if (_console->m_interface_provided) {
@@ -581,6 +641,30 @@ bool dvrk::system::add_console_interfaces(std::shared_ptr<dvrk::console> _consol
                              "emulate_clutch", prmEventButton());
         itf->AddCommandWrite(&console::camera_event_handler, _console.get(),
                              "emulate_camera", prmEventButton());
+        if (has_foot_pedal(_console->m_config->focus_minus)) {
+            itf->AddCommandWrite(&console::focus_minus_event_handler, _console.get(),
+                                 "emulate_focus_minus", prmEventButton());
+            itf->AddEventWrite(_console->events.focus_minus,
+                               "focus_minus", prmEventButton());
+        }
+        if (has_foot_pedal(_console->m_config->focus_plus)) {
+            itf->AddCommandWrite(&console::focus_plus_event_handler, _console.get(),
+                                 "emulate_focus_plus", prmEventButton());
+            itf->AddEventWrite(_console->events.focus_plus,
+                               "focus_plus", prmEventButton());
+        }
+        if (has_foot_pedal(_console->m_config->coag)) {
+            itf->AddCommandWrite(&console::coag_event_handler, _console.get(),
+                                 "emulate_coag", prmEventButton());
+            itf->AddEventWrite(_console->events.coag,
+                               "coag", prmEventButton());
+        }
+        if (has_foot_pedal(_console->m_config->bicoag)) {
+            itf->AddCommandWrite(&console::bicoag_event_handler, _console.get(),
+                                 "emulate_bicoag", prmEventButton());
+            itf->AddEventWrite(_console->events.bicoag,
+                               "bicoag", prmEventButton());
+        }
         itf->AddEventWrite(_console->events.teleop_enabled,
                            "teleop_enabled", false);
         itf->AddEventWrite(_console->events.scale,
@@ -610,72 +694,77 @@ bool dvrk::system::add_console_interfaces(std::shared_ptr<dvrk::console> _consol
         return false;
     }
 
+    // helpers to avoid repeating the same pattern for each pedal
+    // add_pedal_required: MTS_REQUIRED always adds the connection;
+    //                     MTS_OPTIONAL only adds it when component/interface are non-empty
+    auto add_pedal_required = [&](const std::string & pedal_name,
+                                   auto handler,
+                                   const auto & cfg,
+                                   mtsRequiredType required_type) -> bool {
+        auto * itf = AddInterfaceRequired(_console->m_name + "/required_" + pedal_name,
+                                          required_type);
+        if (!itf) {
+            CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add "
+                                     << (required_type == MTS_OPTIONAL ? "optional " : "")
+                                     << pedal_name << " required interface for console \""
+                                     << _console->m_name << "\"" << std::endl;
+            return false;
+        }
+        itf->AddEventHandlerWrite(handler, _console.get(), "Button");
+        if (required_type == MTS_OPTIONAL) {
+            if (!cfg.component.empty() && !cfg.interface.empty()) {
+                m_connections.Add(this->GetName(), _console->m_name + "/required_" + pedal_name,
+                                  cfg.component, cfg.interface);
+            }
+        } else {
+            m_connections.Add(this->GetName(), _console->m_name + "/required_" + pedal_name,
+                              cfg.component, cfg.interface);
+        }
+        return true;
+    };
+
+    // add_pedal_provided: add provided interface and register the event write
+    auto add_pedal_provided = [&](const std::string & pedal_name,
+                                  auto & event,
+                                  bool enabled = true) -> bool {
+        if (!enabled) {
+            return true;
+        }
+        auto * itf = this->AddInterfaceProvided(_console->m_name + "/" + pedal_name);
+        if (!itf) {
+            CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add "
+                                     << pedal_name << " provided interface for console \""
+                                     << _console->m_name << "\"" << std::endl;
+            return false;
+        }
+        itf->AddEventWrite(event, "Button", prmEventButton());
+        return true;
+    };
+
     // inputs
     if (_console->m_config->input_type != console_input_type::SIMULATED) {
-        mtsInterfaceRequired * interface_required;
-        // clutch
-        interface_required = AddInterfaceRequired(_console->m_name + "/required_clutch");
-        if (interface_required) {
-            interface_required->AddEventHandlerWrite(&console::clutch_event_handler, _console.get(), "Button");
-        } else {
-            CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add clutch required interface for console \""
-                                     << _console->m_name << "\"" << std::endl;
-            return false;
-        }
-        m_connections.Add(this->GetName(), _console->m_name + "/required_clutch",
-                          _console->m_config->clutch.component,
-                          _console->m_config->clutch.interface);
-        // camera
-        interface_required = AddInterfaceRequired(_console->m_name + "/required_camera");
-        if (interface_required) {
-            interface_required->AddEventHandlerWrite(&console::camera_event_handler, _console.get(), "Button");
-        } else {
-            CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add camera required interface for console \""
-                                     << _console->m_name << "\"" << std::endl;
-            return false;
-        }
-        m_connections.Add(this->GetName(), _console->m_name + "/required_camera",
-                          _console->m_config->camera.component,
-                          _console->m_config->camera.interface);
-        // operator_present
-        interface_required = AddInterfaceRequired(_console->m_name + "/required_operator_present");
-        if (interface_required) {
-            interface_required->AddEventHandlerWrite(&console::operator_present_event_handler, _console.get(), "Button");
-        } else {
-            CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add operator_present required interface for console \""
-                                     << _console->m_name << "\"" << std::endl;
-            return false;
-        }
-        m_connections.Add(this->GetName(), _console->m_name + "/required_operator_present",
-                          _console->m_config->operator_present.component,
-                          _console->m_config->operator_present.interface);
+        if (!add_pedal_required("clutch",           &console::clutch_event_handler,           _console->m_config->clutch,           MTS_REQUIRED)) return false;
+        if (!add_pedal_required("camera",           &console::camera_event_handler,           _console->m_config->camera,           MTS_REQUIRED)) return false;
+        // optional foot pedal tray inputs
+        if (!add_pedal_required("focus_minus",      &console::focus_minus_event_handler,      _console->m_config->focus_minus,      MTS_OPTIONAL)) return false;
+        if (!add_pedal_required("focus_plus",       &console::focus_plus_event_handler,       _console->m_config->focus_plus,       MTS_OPTIONAL)) return false;
+        if (!add_pedal_required("coag",             &console::coag_event_handler,             _console->m_config->coag,             MTS_OPTIONAL)) return false;
+        if (!add_pedal_required("bicoag",           &console::bicoag_event_handler,           _console->m_config->bicoag,           MTS_OPTIONAL)) return false;
+        if (!add_pedal_required("operator_present", &console::operator_present_event_handler, _console->m_config->operator_present, MTS_REQUIRED)) return false;
     }
 
     // propagate inputs
-    mtsInterfaceProvided * interface_provided = this->AddInterfaceProvided(_console->m_name + "/clutch");
-    if (interface_provided) {
-        interface_provided->AddEventWrite(_console->events.clutch, "Button", prmEventButton());
-    } else {
-        CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add clutch provided interface for _console \""
-                                 << _console->m_name << "\"" << std::endl;
-        return false;
-    }
-    interface_provided = this->AddInterfaceProvided(_console->m_name + "/camera");
-    if (interface_provided) {
-        interface_provided->AddEventWrite(_console->events.camera, "Button", prmEventButton());
-    } else {
-        CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add camera provided interface for console \""
-                                 << _console->m_name << "\"" << std::endl;
-        return false;
-    }
-    interface_provided = this->AddInterfaceProvided(_console->m_name + "/operator_present");
-    if (interface_provided) {
-        interface_provided->AddEventWrite(_console->events.operator_present, "Button", prmEventButton());
-    } else {
-        CMN_LOG_CLASS_INIT_ERROR << "add_console_interfaces: failed to add operator_present provided interface for console \""
-                                 << _console->m_name << "\"" << std::endl;
-        return false;
-    }
+    if (!add_pedal_provided("clutch",           _console->events.clutch))           return false;
+    if (!add_pedal_provided("camera",           _console->events.camera))           return false;
+    if (!add_pedal_provided("focus_minus",      _console->events.focus_minus,
+                            has_foot_pedal(_console->m_config->focus_minus)))       return false;
+    if (!add_pedal_provided("focus_plus",       _console->events.focus_plus,
+                            has_foot_pedal(_console->m_config->focus_plus)))        return false;
+    if (!add_pedal_provided("coag",             _console->events.coag,
+                            has_foot_pedal(_console->m_config->coag)))              return false;
+    if (!add_pedal_provided("bicoag",           _console->events.bicoag,
+                            has_foot_pedal(_console->m_config->bicoag)))            return false;
+    if (!add_pedal_provided("operator_present", _console->events.operator_present)) return false;
     return true;
 }
 
@@ -754,6 +843,22 @@ bool dvrk::system::Connect(void)
         if (arm->SUJInterfaceRequiredToSUJ) {
             component_manager->Connect(this->GetName(), arm->SUJInterfaceRequiredToSUJ->GetName(),
                                        "SUJ", arm->m_name);
+        }
+    }
+
+    if (m_SUJ && m_SUJ->m_config->type == dvrk::arm_type::SUJ_Si && m_SUJ->m_config->simulation == prmSimulationType::NONE) {
+        for (const auto & iter : m_arm_proxies) {
+            const std::string & name = iter.first;
+            auto & arm_proxy = iter.second;
+            if (arm_proxy->m_config->native_or_derived_PSM() || arm_proxy->m_config->native_or_derived_ECM()) {
+                if (!component_manager->Connect("SUJ", name + "IO",
+                                                arm_proxy->m_IO_component_name, name + "_SUJ_Si")) {
+                    CMN_LOG_CLASS_INIT_ERROR << "Connect: failed to connect component SUJ required interface "
+                                             << name << "IO to " << arm_proxy->m_IO_component_name
+                                             << " provided interface " << name << "_SUJ_Si" << std::endl;
+                    return false;
+                }
+            }
         }
     }
 

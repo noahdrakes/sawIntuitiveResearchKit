@@ -5,7 +5,7 @@
   Author(s):  Anton Deguet, Zihan Chen
   Created on: 2013-05-17
 
-  (C) Copyright 2013-2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2013-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -28,6 +28,7 @@ http://www.cisst.org/cisst/license.txt.
 #include <cisstMultiTask/mtsManagerLocal.h>
 #include <sawIntuitiveResearchKit/mtsIntuitiveResearchKit.h>
 #include <sawIntuitiveResearchKit/sawIntuitiveResearchKitRevision.h>
+#include <sawIntuitiveResearchKit/sawIntuitiveResearchKitFullRevision.h>
 #include <sawIntuitiveResearchKit/system_Qt_widget.h>
 
 #include <QMessageBox>
@@ -44,12 +45,19 @@ http://www.cisst.org/cisst/license.txt.
 #include <QShortcut>
 #include <QSlider>
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#define DVRK_QT_KEY(modifier, key) (modifier | key)
+#else
+#define DVRK_QT_KEY(modifier, key) (modifier + key)
+#endif
+
 typedef dvrk::system_Qt_widget dvrk_system_Qt_widget;
 CMN_IMPLEMENT_SERVICES(dvrk_system_Qt_widget);
 
 dvrk::system_Qt_widget::system_Qt_widget(const std::string & _component_name):
     mtsComponent(_component_name)
 {
+    this->AddTag("UI");
     QMMessage = new mtsMessageQtWidget();
 
     mtsInterfaceRequired * interface_required = AddInterfaceRequired("Main");
@@ -216,15 +224,15 @@ void dvrk::system_Qt_widget::setupUi(void)
     armsBox->setLayout(armsLayout);
     QPBPowerOff = new QPushButton("Power Off");
     QPBPowerOff->setToolTip("ctrl + O");
-    new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_O), this, SLOT(slot_power_off()));
+    new QShortcut(QKeySequence(DVRK_QT_KEY(Qt::CTRL, Qt::Key_O)), this, SLOT(slot_power_off()));
     armsLayout->addWidget(QPBPowerOff);
     QPBPowerOn = new QPushButton("Power On");
     QPBPowerOn->setToolTip("ctrl + P");
-    new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_P), this, SLOT(slot_power_on()));
+    new QShortcut(QKeySequence(DVRK_QT_KEY(Qt::CTRL, Qt::Key_P)), this, SLOT(slot_power_on()));
     armsLayout->addWidget(QPBPowerOn);
     QPBHome = new QPushButton("Home");
     QPBHome->setToolTip("ctrl + H");
-    new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_H), this, SLOT(slot_home()));
+    new QShortcut(QKeySequence(DVRK_QT_KEY(Qt::CTRL, Qt::Key_H)), this, SLOT(slot_home()));
     armsLayout->addWidget(QPBHome);
     // arm buttons
     QVBArms = new QVBoxLayout();
@@ -272,7 +280,7 @@ void dvrk::system_Qt_widget::setupUi(void)
     setLayout(mainLayout);
 
     std::string title = "dVRK ";
-    title.append(sawIntuitiveResearchKit_VERSION);
+    title.append(SAW_INTUITIVE_RESEARCH_KIT_FULL_REVISION);
     title.append(" / ");
     title.append(CISST_FULL_REVISION);
     setWindowTitle(title.c_str());
@@ -294,7 +302,7 @@ void dvrk::system_Qt_widget::setupUi(void)
     connect(QPBComponentViewer, SIGNAL(clicked()),
             this, SLOT(slot_component_viewer()));
 
-    new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_Q), this, SLOT(close()));
+    new QShortcut(QKeySequence(DVRK_QT_KEY(Qt::CTRL, Qt::Key_Q)), this, SLOT(close()));
 }
 
 

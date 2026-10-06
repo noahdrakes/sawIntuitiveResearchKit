@@ -10,7 +10,7 @@
 # --- end cisst license ---
 
 cmake_minimum_required(VERSION 3.10)
-project (saw_intuitive_research_kit_example_bilateral_teleop VERSION 2.4.0)
+project (saw_intuitive_research_kit_example_bilateral_teleop VERSION 2.5.0)
 
 # first test for ROS1
 set (ROS1_depends
@@ -59,17 +59,14 @@ set (
   cisstRobot
   cisstNumerical)
 
-find_package (cisst REQUIRED COMPONENTS ${REQUIRED_CISST_LIBRARIES})
-
-# load cisst configuration
-include (${CISST_USE_FILE})
+find_package (cisst 1.5 REQUIRED COMPONENTS ${REQUIRED_CISST_LIBRARIES})
 
 # set paths
 cisst_set_output_path ()
 
 # sawIntuitiveResearchKit has been compiled within cisst, we should
 # find it automatically
-find_package(sawIntuitiveResearchKit 2.4.0 REQUIRED)
+find_package(sawIntuitiveResearchKit 2.5.0 REQUIRED)
 
 # sawControllers, for mtsPIDConfiguration.h -- mtsBilateralTeleOperationPSM
 # reads each arm's live PID "configuration" command directly (e.g. to

@@ -5,7 +5,7 @@
   Author(s):  Anton Deguet, Zihan Chen
   Created on: 2013-05-17
 
-  (C) Copyright 2013-2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2013-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -45,6 +45,12 @@ http://www.cisst.org/cisst/license.txt.
 #include <QLabel>
 #include <QPixmap>
 #include <QShortcut>
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#define DVRK_QT_KEY(modifier, key) (modifier | key)
+#else
+#define DVRK_QT_KEY(modifier, key) (modifier + key)
+#endif
 #include <QDoubleSpinBox>
 #include <QSlider>
 #include <QRadioButton>
@@ -59,6 +65,7 @@ dvrk::console_Qt_widget::console_Qt_widget(const std::string & _component_name,
     mtsComponent(_component_name),
     m_system_widget(_system_widget)
 {
+    this->AddTag("UI");
     mtsInterfaceRequired * itf = AddInterfaceRequired("Main");
     if (itf) {
         itf->AddFunction("teleop_enable", console.teleop_enable);
@@ -239,8 +246,8 @@ void dvrk::console_Qt_widget::setupUi(void)
     QCBTeleopEnable = new QCheckBox("");
     QPBTeleopEnable->setToolTip("ctrl + T to start\nctrl + S to stop");
     QCBTeleopEnable->setToolTip("ctrl + T to start\nctrl + S to stop");
-    new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_T), this, SLOT(slot_teleop_start()));
-    new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_S), this, SLOT(slot_teleop_stop()));
+    new QShortcut(QKeySequence(DVRK_QT_KEY(Qt::CTRL, Qt::Key_T)), this, SLOT(slot_teleop_start()));
+    new QShortcut(QKeySequence(DVRK_QT_KEY(Qt::CTRL, Qt::Key_S)), this, SLOT(slot_teleop_stop()));
     // set default to false
     slot_teleop_enabled_event_handler(false);
     teleopEnableLayout->addWidget(QCBTeleopEnable);

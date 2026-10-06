@@ -5,7 +5,7 @@
   Author(s):  Anton Deguet
   Created on: 2015-07-18
 
-  (C) Copyright 2015-2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2015-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -68,9 +68,6 @@ dvrk::system_ROS::system_ROS(const std::string & name,
     // system
     add_topics_system(m_system->GetName());
 
-    // IO topics
-    add_topics_IO_stats();
-
     // arm topics
     for (const auto & iter : m_system->m_arm_proxies) {
         const std::string & name = iter.first;
@@ -82,15 +79,13 @@ dvrk::system_ROS::system_ROS(const std::string & name,
             } else if (config.native_or_derived_ECM()) {
                 bridge_interface_provided_ECM(name, "Arm",
                                               publish_period_in_seconds, tf_period_in_seconds);
-                if (config.simulation
-                    == dvrk::simulation::SIMULATION_NONE) {
+                if (config.simulation == prmSimulationType::NONE) {
                     add_topics_ECM_IO(name, iter.second->m_IO_component_name);
                 }
             } else if (config.native_or_derived_PSM()) {
                 bridge_interface_provided_PSM(name, "Arm",
                                               publish_period_in_seconds, tf_period_in_seconds);
-                if (config.simulation
-                    == dvrk::simulation::SIMULATION_NONE) {
+                if (config.simulation == prmSimulationType::NONE) {
                     add_topics_PSM_IO(name, iter.second->m_IO_component_name);
                 }
             } else if (config.generic()) {
@@ -148,9 +143,6 @@ void dvrk::system_ROS::bridge_interface_provided_arm(const std::string & _arm_na
     // bridged (e.g. subscribers and events)
     const std::string _required_interface_name = _arm_name + "_using_" + _interface_name;
 
-    subscribers_bridge().AddSubscriberToCommandWrite<prmPositionCartesianSet, CISST_RAL_MSG(geometry_msgs, PoseStamped)>
-        (_required_interface_name, "set_base_frame",
-         _arm_name + "/set_base_frame");
     subscribers_bridge().AddSubscriberToCommandWrite<double, CISST_RAL_MSG(std_msgs, Float64)>
         (_required_interface_name, "trajectory_j/set_ratio",
          _arm_name + "/trajectory_j/set_ratio");
@@ -345,6 +337,15 @@ void dvrk::system_ROS::add_topics_console(const std::string & _name)
     CMN_LOG_CLASS_INIT_VERBOSE << "add_topics_console called for " << _name << std::endl;
     const std::string & interface_name = _name;
     const std::string ros_namespace = _name + "/";
+    const auto console_iter = m_system->m_consoles.find(_name);
+    if (console_iter == m_system->m_consoles.end()) {
+        CMN_LOG_CLASS_INIT_ERROR << "add_topics_console: can't find console " << _name << std::endl;
+        return;
+    }
+    const auto has_foot_pedal = [](const auto & cfg) {
+        return !cfg.component.empty() && !cfg.interface.empty();
+    };
+    const auto & config = *(console_iter->second->m_config);
 
     subscribers_bridge().AddSubscriberToCommandWrite<bool, CISST_RAL_MSG(std_msgs, Bool)>
         (interface_name, "teleop_enable",
@@ -372,17 +373,31 @@ void dvrk::system_ROS::add_topics_console(const std::string & _name)
     events_bridge().AddPublisherFromEventWrite<std::string, CISST_RAL_MSG(std_msgs, String)>
         (interface_name, "teleop_unselected",
          ros_namespace + "teleop/unselected");
-    const auto events = std::list<std::string>({"operator_present", "clutch", "camera"});
-    for (const auto & event : events) {
+    const auto bridge_console_button = [&](const std::string & event) {
         events_bridge().AddPublisherFromEventWrite<prmEventButton, CISST_RAL_MSG(sensor_msgs, Joy)>
             (_name + "_" + event, "Button",
              ros_namespace + event);
         m_connections.Add(events_bridge().GetName(), _name + "_" + event,
                           m_system->GetName(), _name + "/" + event);
-        // emulate subscribers
         subscribers_bridge().AddSubscriberToCommandWrite<prmEventButton, CISST_RAL_MSG(sensor_msgs, Joy)>
             (interface_name, "emulate_" + event,
              ros_namespace + "emulate_" + event);
+    };
+
+    bridge_console_button("operator_present");
+    bridge_console_button("clutch");
+    bridge_console_button("camera");
+    if (has_foot_pedal(config.focus_minus)) {
+        bridge_console_button("focus_minus");
+    }
+    if (has_foot_pedal(config.focus_plus)) {
+        bridge_console_button("focus_plus");
+    }
+    if (has_foot_pedal(config.coag)) {
+        bridge_console_button("coag");
+    }
+    if (has_foot_pedal(config.bicoag)) {
+        bridge_console_button("bicoag");
     }
 
     m_connections.Add(subscribers_bridge().GetName(), interface_name,
@@ -426,12 +441,14 @@ void dvrk::system_ROS::add_topics_endoscope_focus(void)
 }
 
 
-void dvrk::system_ROS::add_topics_IO_stats(void)
+void dvrk::system_ROS::add_topics_IO(const double _publish_period_in_seconds,
+                                     const bool _read_write)
 {
-    std::cerr << CMN_LOG_DETAILS << " should be in add_topics IO " << std::endl;
     CMN_LOG_CLASS_INIT_VERBOSE << "add_topics_IO called" << std::endl;
+    mtsManagerLocal * component_manager = mtsManagerLocal::GetInstance();
     for (const auto & iter : m_system->m_IO_proxies) {
         const std::string & name = iter.first;
+        // IO period statistics
         const std::string & interface_name = "IO_" + name;
         const std::string ros_namespace = "stats/IO_" + name;
         m_pub_bridge->AddPublisherFromCommandRead<mtsIntervalStatistics, CISST_RAL_MSG(cisst_msgs, IntervalStatistics)>
@@ -443,20 +460,9 @@ void dvrk::system_ROS::add_topics_IO_stats(void)
         m_pub_bridge->AddPublisherFromCommandRead<mtsIntervalStatistics, CISST_RAL_MSG(cisst_msgs, IntervalStatistics)>
             (interface_name, "period_statistics_write",
              ros_namespace + "period_statistics_write");
-
         m_connections.Add(m_pub_bridge->GetName(), interface_name,
                           name, "Configuration");
-    }
-}
-
-
-void dvrk::system_ROS::add_topics_IO(const double _publish_period_in_seconds,
-                                     const bool _read_write)
-{
-    CMN_LOG_CLASS_INIT_VERBOSE << "add_topics_IO called" << std::endl;
-    mtsManagerLocal * component_manager = mtsManagerLocal::GetInstance();
-    for (const auto & iter : m_system->m_IO_proxies) {
-        const std::string & name = iter.first;
+        // full IO bridge
         const std::string bridge_name = "IO_bridge_" + name;
         if (!component_manager->GetComponent(bridge_name)) {
             // IO bridge uses an object factory based on list of interfaces provided by the IO component
@@ -539,20 +545,44 @@ void dvrk::system_ROS::add_topics_SUJ_voltages(void)
         CMN_LOG_CLASS_INIT_WARNING << "add_topics_SUJ_voltages: no SUJ on this console!  option -s ignored!" << std::endl;
         return;
     }
-    mtsROSBridge * pub_bridge = new mtsROSBridge("SUJ_Voltages", 0.005 * cmn_s,
-                                                 node_handle_ptr());
-    const auto arms = std::list<std::string>({"ECM", "PSM1", "PSM2", "PSM3"});
-    for (auto arm : arms) {
-        pub_bridge->AddPublisherFromCommandRead<vctDoubleVec, CISST_RAL_MSG(sensor_msgs, JointState)>
-            ("SUJ_" + arm, "GetVoltagesPrimary",
-             "SUJ/" + arm + "/primary_voltage/measured_js");
-        pub_bridge->AddPublisherFromCommandRead<vctDoubleVec, CISST_RAL_MSG(sensor_msgs, JointState)>
-            ("SUJ_" + arm, "GetVoltagesSecondary",
-             "SUJ/" + arm + "/secondary_voltage/measured_js");
-        m_connections.Add(pub_bridge->GetName(), "SUJ_" + arm,
-                          "SUJ", arm);
+
+    if (m_system->m_SUJ && m_system->m_SUJ->generation() == dvrk::generation::Si) {
+        mtsROSBridge * pub_bridge = new mtsROSBridge("SUJ_Voltages", 0.005 * cmn_s,
+                                                     node_handle_ptr());
+        const auto arms = std::list<std::string>({"ECM", "PSM1", "PSM2", "PSM3"});
+        for (auto arm : arms) {
+            auto arm_proxy_it = m_system->m_arm_proxies.find(arm);
+            if (arm_proxy_it != m_system->m_arm_proxies.end()) {
+                auto arm_proxy = arm_proxy_it->second;
+                if (!arm_proxy->m_IO_component_name.empty()) {
+                    pub_bridge->AddPublisherFromCommandRead<prmStateJoint, CISST_RAL_MSG(sensor_msgs, JointState)>
+                        ("SUJ_" + arm, "primary_voltage/measured_js",
+                         "SUJ/" + arm + "/primary_voltage/measured_js");
+                    pub_bridge->AddPublisherFromCommandRead<prmStateJoint, CISST_RAL_MSG(sensor_msgs, JointState)>
+                        ("SUJ_" + arm, "secondary_voltage/measured_js",
+                         "SUJ/" + arm + "/secondary_voltage/measured_js");
+                    m_connections.Add(pub_bridge->GetName(), "SUJ_" + arm,
+                                       arm_proxy->m_IO_component_name, arm + "_SUJ_Si");
+                }
+            }
+        }
+        component_manager->AddComponent(pub_bridge);
+    } else {
+        mtsROSBridge * pub_bridge = new mtsROSBridge("SUJ_Voltages", 0.005 * cmn_s,
+                                                     node_handle_ptr());
+        const auto arms = std::list<std::string>({"ECM", "PSM1", "PSM2", "PSM3"});
+        for (auto arm : arms) {
+            pub_bridge->AddPublisherFromCommandRead<vctDoubleVec, CISST_RAL_MSG(sensor_msgs, JointState)>
+                ("SUJ_" + arm, "GetVoltagesPrimary",
+                 "SUJ/" + arm + "/primary_voltage/measured_js");
+            pub_bridge->AddPublisherFromCommandRead<vctDoubleVec, CISST_RAL_MSG(sensor_msgs, JointState)>
+                ("SUJ_" + arm, "GetVoltagesSecondary",
+                 "SUJ/" + arm + "/secondary_voltage/measured_js");
+            m_connections.Add(pub_bridge->GetName(), "SUJ_" + arm,
+                               "SUJ", arm);
+        }
+        component_manager->AddComponent(pub_bridge);
     }
-    component_manager->AddComponent(pub_bridge);
 }
 
 
@@ -592,17 +622,6 @@ void dvrk::system_ROS::add_topics_teleop_ECM(const std::string & _name)
     cisst_ral::clean_namespace(ros_namespace);
     ros_namespace += "/";
 
-    // messages
-    events_bridge().AddLogFromEventWrite(_name + "_log", "error",
-                                         mtsROSEventWriteLog::ROS_LOG_ERROR);
-    events_bridge().AddLogFromEventWrite(_name + "_log", "warning",
-                                         mtsROSEventWriteLog::ROS_LOG_WARN);
-    events_bridge().AddLogFromEventWrite(_name + "_log", "status",
-                                         mtsROSEventWriteLog::ROS_LOG_INFO);
-    // connect
-    m_connections.Add(events_bridge().GetName(), _name + "_log",
-                      _name, "Setting");
-
     // events
     events_bridge().AddPublisherFromEventWrite<std::string, CISST_RAL_MSG(std_msgs, String)>
         (_name, "desired_state", ros_namespace + "desired_state");
@@ -635,17 +654,6 @@ void dvrk::system_ROS::add_topics_teleop_PSM(const std::string & _name)
     std::string ros_namespace = _name;
     cisst_ral::clean_namespace(ros_namespace);
     ros_namespace += "/";
-
-    // messages
-    events_bridge().AddLogFromEventWrite(_name + "_log", "error",
-                                         mtsROSEventWriteLog::ROS_LOG_ERROR);
-    events_bridge().AddLogFromEventWrite(_name + "_log", "warning",
-                                         mtsROSEventWriteLog::ROS_LOG_WARN);
-    events_bridge().AddLogFromEventWrite(_name + "_log", "status",
-                                         mtsROSEventWriteLog::ROS_LOG_INFO);
-    // connect
-    m_connections.Add(events_bridge().GetName(), _name + "_log",
-                      _name, "Setting");
 
     // publisher
     m_pub_bridge->AddPublisherFromCommandRead<vctMatRot3, CISST_RAL_MSG(geometry_msgs, QuaternionStamped)>

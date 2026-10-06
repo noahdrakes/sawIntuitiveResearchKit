@@ -1,5 +1,8 @@
 cmake_minimum_required (VERSION 3.16)
-project (dvrk_hrsv_widget VERSION 2.4.0)
+if (POLICY CMP0144)
+  cmake_policy (SET CMP0144 NEW)
+endif ()
+project (dvrk_hrsv_widget VERSION 2.5.0)
 
 # first test for ROS1
 set (ROS1_depends roscpp std_msgs diagnostic_msgs sensor_msgs)
@@ -30,9 +33,14 @@ else (catkin_FOUND)
   endif (ament_cmake_FOUND)
 endif (catkin_FOUND)
 
-# find Qt
-find_package (Qt5Widgets REQUIRED)
-find_package (Qt5Core REQUIRED)
+# find Qt without cisst dependency - prefer Qt6, fall back to Qt5
+find_package (Qt6 QUIET COMPONENTS Widgets Core)
+if (Qt6_FOUND)
+  set (QT_VERSION 6)
+else ()
+  find_package (Qt5 REQUIRED COMPONENTS Widgets Core)
+  set (QT_VERSION 5)
+endif ()
 
 set (CMAKE_AUTOMOC ON)
 set (CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -50,7 +58,8 @@ add_executable (hrsv_widget
 
 target_link_libraries (
   hrsv_widget
-  Qt5::Widgets
+  Qt${QT_VERSION}::Core
+  Qt${QT_VERSION}::Widgets
   ${catkin_LIBRARIES})
 
 
@@ -61,9 +70,12 @@ install (TARGETS hrsv_widget
   INCLUDES DESTINATION include)
 
 if (ROS_VERSION EQUAL 2)
-  ament_target_dependencies (
+  target_link_libraries (
     hrsv_widget
-    ${ROS2_depends}
+    rclcpp::rclcpp
+    std_msgs::std_msgs__rosidl_typesupport_cpp
+    diagnostic_msgs::diagnostic_msgs__rosidl_typesupport_cpp
+    sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
     )
   ament_package ()
 endif ()

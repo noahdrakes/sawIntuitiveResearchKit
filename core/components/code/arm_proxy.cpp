@@ -5,7 +5,7 @@
   Author(s):  Anton Deguet
   Created on: 2013-05-17
 
-  (C) Copyright 2013-2025 Johns Hopkins University (JHU), All Rights Reserved.
+  (C) Copyright 2013-2026 Johns Hopkins University (JHU), All Rights Reserved.
 
 --- begin cisst license - do not edit ---
 
@@ -30,9 +30,7 @@ http://www.cisst.org/cisst/license.txt.
 #include <sawIntuitiveResearchKit/mtsIntuitiveResearchKitECM.h>
 #include <sawIntuitiveResearchKit/mtsIntuitiveResearchKitSUJ.h>
 #include <sawIntuitiveResearchKit/mtsIntuitiveResearchKitSUJFixed.h>
-#if sawIntuitiveResearchKit_HAS_SUJ_Si
-  #include <sawIntuitiveResearchKit/mtsIntuitiveResearchKitSUJSi.h>
-#endif
+#include <sawIntuitiveResearchKit/mtsIntuitiveResearchKitSUJSi.h>
 #include <sawIntuitiveResearchKit/system.h>
 #include <sawIntuitiveResearchKit/IO_proxy.h>
 
@@ -100,7 +98,7 @@ void dvrk::arm_proxy::post_configure(void)
 }
 
 
-void dvrk::arm_proxy::create_arm(void)
+void dvrk::arm_proxy::create_arm()
 {
     if (!m_config->native_or_derived()) {
         return;
@@ -118,7 +116,7 @@ void dvrk::arm_proxy::create_arm(void)
     } else {
         // -2- using serial number
         if ((m_config->type != dvrk::arm_type::FOCUS_CONTROLLER)
-            && (m_config->simulation != dvrk::simulation::SIMULATION_KINEMATIC)) {
+            && (m_config->simulation != prmSimulationType::KINEMATIC)) {
             if (m_config->serial == "") {
                 CMN_LOG_INIT_ERROR << "arm_proxy::create_arm: serial number required for arm "
                                    << m_name << std::endl;
@@ -162,9 +160,8 @@ void dvrk::arm_proxy::create_arm(void)
     case dvrk::arm_type::SUJ_Classic:
         {
             mtsIntuitiveResearchKitSUJ * suj = new mtsIntuitiveResearchKitSUJ(m_name, m_config->period);
-            if (m_config->simulation == dvrk::simulation::SIMULATION_KINEMATIC) {
-                suj->set_simulated();
-            } else if (m_config->simulation == dvrk::simulation::SIMULATION_NONE) {
+            suj->set_simulation_mode(m_config->simulation);
+            if (m_config->simulation == prmSimulationType::NONE) {
                 m_system->m_connections.Add(m_name, "no_mux_reset",
                                             m_IO_component_name, "no_mux_reset");
                 m_system->m_connections.Add(m_name, "mux_increment",
@@ -192,18 +189,10 @@ void dvrk::arm_proxy::create_arm(void)
         break;
     case dvrk::arm_type::SUJ_Si:
         {
-#if sawIntuitiveResearchKit_HAS_SUJ_Si
             mtsIntuitiveResearchKitSUJSi * suj = new mtsIntuitiveResearchKitSUJSi(m_name, m_config->period);
-            if (m_config->simulation == dvrk::simulation::SIMULATION_KINEMATIC) {
-                suj->set_simulated();
-            }
+            suj->set_simulation_mode(m_config->simulation);
             suj->Configure(m_arm_configuration_file);
             component_manager->AddComponent(suj);
-#else
-            CMN_LOG_INIT_ERROR << "dvrk::arm_proxy::ConfigureArm: can't create an arm of type SUJ_Si because sawIntuitiveResearchKit_HAS_SUJ_Si is set to OFF in CMake"
-                               << std::endl;
-            exit(EXIT_FAILURE);
-#endif
         }
         break;
     case dvrk::arm_type::SUJ_Fixed:
@@ -221,7 +210,7 @@ void dvrk::arm_proxy::create_arm(void)
                 mtsIntuitiveResearchKitMTM * mtm = dynamic_cast<mtsIntuitiveResearchKitMTM *>(component);
                 if (mtm) {
                     std::cerr << CMN_LOG_DETAILS << " is this risky?" << std::endl;
-                    m_arm = std::shared_ptr<mtsIntuitiveResearchKitMTM>(mtm, [](mtsIntuitiveResearchKitMTM * p){ ; });
+                    m_arm = std::shared_ptr<mtsIntuitiveResearchKitMTM>(mtm, [](mtsIntuitiveResearchKitMTM *){ });
                 } else {
                     CMN_LOG_INIT_ERROR << "dvrk::arm_proxy::ConfigureArm: component \""
                                        << m_name << "\" doesn't seem to be derived from mtsIntuitiveResearchKitMTM."
@@ -291,16 +280,14 @@ void dvrk::arm_proxy::create_arm(void)
     if (m_config->native_or_derived()
         && !m_config->SUJ()) {
         CMN_ASSERT(m_arm != nullptr);
-        if (m_config->simulation == dvrk::simulation::SIMULATION_KINEMATIC) {
-            m_arm->set_simulated();
-        }
+        m_arm->set_simulation_mode(m_config->simulation);
         m_arm->set_calibration_mode(m_calibration_mode);
         m_arm->Configure(m_arm_configuration_file);
         set_base_frame_if_needed();
         component_manager->AddComponent(m_arm.get());
 
         // for all native arms not simulated, connect a few IOS
-        if (m_config->simulation == dvrk::simulation::SIMULATION_NONE) {
+        if (m_config->simulation == prmSimulationType::NONE) {
 
             if (m_config->PSM()) {
                 std::vector<std::string> itfs = {"adapter", "tool", "arm_clutch", "dallas"};
@@ -363,6 +350,11 @@ void dvrk::arm_proxy::configure_IO(void)
     CMN_ASSERT(iter_IO != m_system->m_IO_proxies.end());
     iter_IO->second->m_IO->Configure(m_IO_configuration_file);
 
+    // forward the isHwSimulated flag to the arm
+    if (iter_IO->second->m_IO->IsHardwareSimulated())
+    {
+        m_arm->set_simulation_mode(prmSimulationType::IO);
+    }
 
     // search for the gripper config file
     if (m_config->MTM()) {
@@ -443,8 +435,8 @@ void dvrk::arm_proxy::create_PID(void)
                               (m_config->PID_period != 0.0) ? m_config->PID_period : mtsIntuitiveResearchKit::IOPeriod);
     bool hasIO = true;
     pid->Configure(m_PID_configuration_file);
-    if (m_config->simulation == dvrk::simulation::SIMULATION_KINEMATIC) {
-        pid->SetSimulated();
+    pid->set_simulation_mode(m_config->simulation);
+    if (m_config->simulation == prmSimulationType::KINEMATIC) {
         hasIO = false;
     }
     component_manager->AddComponent(pid);
@@ -511,10 +503,16 @@ dvrk::generation dvrk::arm_proxy::generation(void) const
 {
     if (m_arm != nullptr) {
         return m_arm->generation();
-    } else {
-        CMN_LOG_INIT_ERROR << "arm_proxy::generation failed, arm needs to be configured first" << std::endl;
-        exit(EXIT_FAILURE);
     }
+    if (m_config != nullptr) {
+        if (m_config->type == dvrk::arm_type::SUJ_Si) {
+            return dvrk::generation::Si;
+        } else if (m_config->type == dvrk::arm_type::SUJ_Classic) {
+            return dvrk::generation::Classic;
+        }
+    }
+    CMN_LOG_INIT_ERROR << "arm_proxy::generation failed, arm needs to be configured first" << std::endl;
+    exit(EXIT_FAILURE);
     return dvrk::generation::GENERATION_UNDEFINED;
 }
 
