@@ -164,7 +164,7 @@ protected:
     // tracking anchor -- see the UpdateInitialState() call there
     bool m_mtm_was_released = false;
 
-    // which of four ways the MTM's coupling is gated, runtime-settable via
+    // which of three ways the MTM's coupling is gated, runtime-settable via
     // set_teleop_mode for A/B testing (e.g. a user study) without editing
     // config or rebuilding:
     //   "bilateral"   -- always fully coupled, contact detection ignored,
@@ -205,12 +205,6 @@ protected:
     //                    (mistaken -- see "contact" above) discontinuity
     //                    concern; unified once the real cause (DO state,
     //                    not the fallback itself) was identified.
-    //   "contact2"    -- same contact-detector gating and in-contact
-    //                    control law as "contact" -- but unlike "contact", out of
-    //                    contact it still uses release_mtm()-based zeroing
-    //                    (PSM force zeroed, MTM released), not the base
-    //                    class fallback -- the two aren't identical out of
-    //                    contact
     std::string m_teleop_mode = "contact";
 
     // reads the *live* PID configuration (not the JSON file on disk, which
@@ -244,9 +238,8 @@ protected:
                                    const mtsFunctionWrite & set_config, const std::string & arm_label);
 
     // gravity comp on, given body_servo_cf wrench, unlock (or lock, per
-    // config) orientation -- shared by release_mtm() (zero wrench, called
-    // every cycle out of contact) and any other in-contact effort-mode
-    // delivery
+    // config) orientation -- used by release_mtm() (zero wrench, called
+    // once on the transition out of contact)
     void command_mtm_wrench(const vct6 & force);
     void release_mtm();
 

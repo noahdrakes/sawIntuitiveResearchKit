@@ -55,7 +55,6 @@ STUDY_CONDITIONS = {
     'BIL_ON':  ('bilateral',  True),
     'CSB':     ('contact',    False),
 }
-OTHER_MODES = ['bilateral2', 'contact2']   # dynamics-compensation variants -- don't touch DO either way
 
 EXCEL_PATH = '/home/ndrakes1/pilot_data/Pilot_Study.xlsx'
 DATA_ROOT = '/home/ndrakes1/pilot_data'
@@ -532,10 +531,6 @@ def launch():
         # hardware read-back
         current_mode.set(code)
 
-    def set_other_mode(mode):
-        cmds['set_mode'].Execute(mtsStdString(mode), MTS_NOT_BLOCKING)
-        current_mode.set(mode)
-
     big_style = ttk.Style()
     big_style.configure('Big.TButton', font=('', 13, 'bold'), padding=10)
 
@@ -547,9 +542,6 @@ def launch():
 
     other_row = ttk.Frame(mode_frame)
     other_row.grid(row=2, column=0, columnspan=4, pady=(0, 5))
-    for mode in OTHER_MODES:
-        ttk.Button(other_row, text=mode, width=12,
-                   command=lambda m=mode: set_other_mode(m)).pack(side='left', padx=2)
 
     def refresh_mode():
         mode = _read_mode(cmds)
@@ -559,7 +551,7 @@ def launch():
             mode += ' (DOBS on/off ambiguous from hardware read-back -- check DO checkboxes below)'
         current_mode.set(mode)
 
-    ttk.Button(other_row, text='refresh', command=refresh_mode).pack(side='left', padx=(15, 2))
+    ttk.Button(other_row, text='refresh', command=refresh_mode).pack(side='left', padx=2)
 
     # -- disturbance observer -------------------------------------------------
 

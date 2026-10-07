@@ -450,7 +450,7 @@ void mtsBilateralTeleOperationPSM::set_mtm_disturbance_observer(const bool & ena
 void mtsBilateralTeleOperationPSM::set_teleop_mode(const std::string & mode)
 {
     static const std::vector<std::string> valid_modes = {
-        "bilateral", "contact", "unilateral", "contact2"
+        "bilateral", "contact", "unilateral"
     };
     if (std::find(valid_modes.begin(), valid_modes.end(), mode) == valid_modes.end()) {
         if (mInterface) {
@@ -472,10 +472,7 @@ void mtsBilateralTeleOperationPSM::RunCartesianTeleop()
         return;
     }
 
-    // "contact" and "contact2" share identical gating -- they only differ
-    // in the in-contact control law itself, below
-    const bool is_contact_mode = (m_teleop_mode == "contact"
-        || m_teleop_mode == "contact2");
+    const bool is_contact_mode = (m_teleop_mode == "contact");
 
     if (is_contact_mode && m_contact_detector && mArmPSM.measured_js.IsValid()) {
         mtsContactDetector::Signals signals;
@@ -522,8 +519,7 @@ void mtsBilateralTeleOperationPSM::RunCartesianTeleop()
         // this cycle's goal starts at zero position error instead.
         UpdateInitialState();
     }
-    if (out_of_contact && !m_mtm_was_released
-        && (m_teleop_mode == "contact" || m_teleop_mode == "unilateral")) {
+    if (out_of_contact && !m_mtm_was_released) {
         // both "contact"'s out-of-contact path and "unilateral" fall back to
         // the base class's own RunCartesianTeleop() below, which never
         // touches MTM's commanded force itself -- it just replays
@@ -536,7 +532,7 @@ void mtsBilateralTeleOperationPSM::RunCartesianTeleop()
     }
     m_mtm_was_released = out_of_contact;
 
-    if ((m_teleop_mode == "contact" || m_teleop_mode == "unilateral") && out_of_contact) {
+    if (out_of_contact) {
         // fall back to the base class's own control law entirely -- see
         // m_teleop_mode's header comment for why "unilateral" was previously
         // kept on its own separate release_mtm()-based path instead of
@@ -545,21 +541,8 @@ void mtsBilateralTeleOperationPSM::RunCartesianTeleop()
         return;
     }
 
-    // "contact" and "unilateral" both returned above -- from here down,
-    // out_of_contact can only still be true for "contact2" (it keeps its
-    // own release_mtm()-based zeroing instead of the base class fallback,
-    // see m_teleop_mode's "contact2" comment)
     auto psm_goal = mArmPSM.computeGoal(&mArmMTM, m_config.scale, 1.0, m_psm_force_scale);
-    if (out_of_contact) {
-        psm_goal.Force().SetAll(0.0);
-    }
     mArmPSM.servo(psm_goal);
-
-    if (out_of_contact) {
-        // let the MTM go free instead of servoing it to any position/force goal
-        release_mtm();
-        return;
-    }
 
     auto mtm_goal = mArmMTM.computeGoal(&mArmPSM, 1.0 / m_config.scale, m_psm_force_scale, 1.0);
 
